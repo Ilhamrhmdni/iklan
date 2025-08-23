@@ -110,3 +110,27 @@ if df is not None:
         trend["ROAS"] = trend["Total Penjualan"] / trend["Total Biaya Iklan"]
 
         st.line_chart(trend[["Total Penjualan", "Total Biaya Iklan", "ROAS"]])
+
+    # === Grafik Per Akun (slot 15 menit, jika ada kolom Waktu) ===
+    if "Waktu" in df.columns:
+        st.subheader("⏱️ Grafik Performa Per 15 Menit")
+
+        akun = st.selectbox("Pilih akun untuk lihat grafik:", df["Username"].unique())
+        akun_data = df[df["Username"] == akun]
+
+        # Grafik Biaya, Omset, View
+        fig, ax = plt.subplots(figsize=(12, 5))
+        akun_data.set_index("Waktu")[["Total Biaya Iklan", "Total Penjualan"]].plot(ax=ax, marker="o")
+        plt.title(f"Performa Iklan per 15 Menit - {akun}")
+        plt.xlabel("Waktu (slot 15 menit)")
+        plt.ylabel("Nilai (Rp)")
+        st.pyplot(fig)
+
+        # Grafik ROAS
+        if "ROAS" in akun_data.columns:
+            fig2, ax2 = plt.subplots(figsize=(12, 3))
+            akun_data.set_index("Waktu")["ROAS"].plot(ax=ax2, color="orange", marker="x")
+            plt.title(f"ROAS per 15 Menit - {akun}")
+            plt.xlabel("Waktu (slot 15 menit)")
+            plt.ylabel("ROAS")
+            st.pyplot(fig2)
