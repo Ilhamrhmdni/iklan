@@ -81,14 +81,6 @@ def parse_shopee_data(raw_lines):
         if any(k in line.upper() for k in ["BELUM MENDAFTAR", "BELUM ADA IKLAN", "TOTAL", "PAUSED", "ONGOING"]):
             continue
 
-        parts = line.split("\t")
-        if len(parts) < 101: # 5 kolom utama + 96 interval
-            st.warning(f"Melewatkan baris karena format tidak sesuai (ditemukan {len(parts)} kolom, diharapkan 101): '{line[:70]}...'")
-            continue
-
-        studio = parts[0].strip()
-        username = parts[1].strip()
-
         try:
             saldo = float(str(parts[2]).replace(".", "").replace(",", "") or 0)
             total_penjualan = float(str(parts[3]).replace(".", "").replace(",", "") or 0)
