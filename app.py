@@ -2,18 +2,32 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 # --- Konfigurasi Halaman ---
-st.set_page_config(page_title="📊 Analisis ROAS Shopee Lanjutan", layout="wide")
-st.title("📈 Analisis Data Iklan Shopee - Target ROAS 50.0 + Komisi 5%")
+st.set_page_config(page_title="📊 Analisis ROAS Shopee Fleksibel", layout="wide")
+st.title("📈 Analisis Data Iklan Shopee Fleksibel")
 
 st.markdown("""
-**Format Data:** `Nama Studio | Username | Saldo | Penjualan | Biaya Iklan | [Biaya|Order|Efektivitas|Penonton] x96`
+**Format Data:** `Nama Studio | Username | Saldo | Penjualan | Biaya Iklan | [Biaya|Order|Efektivitas|Penonton] ...`
+Aplikasi ini sekarang dapat menerima jumlah interval data yang fleksibel.
 """)
 
 # === Input Data ===
 mode = st.radio("Pilih Cara Input", ["Upload File", "Paste Manual"])
+
+# --- PERUBAHAN: Opsi untuk input fleksibel ---
+st.sidebar.title("⚙️ Pengaturan Input Data")
+report_type = st.sidebar.radio(
+    "Pilih Jenis Laporan",
+    ["Laporan Harian Penuh (24 Jam)", "Laporan Parsial (Sebagian)"]
+)
+
+start_time = time(0, 0)
+if report_type == "Laporan Parsial (Sebagian)":
+    start_time = st.sidebar.time_input("Waktu Mulai Data", value=time(9, 0))
+    st.sidebar.info("Tentukan jam mulai untuk data parsial yang Anda masukkan.")
+
 
 df = None
 lines = []
@@ -68,11 +82,12 @@ def style_summary_table(df_to_style):
     })
 
 # === Parsing Function ===
+# --- PERUBAHAN: Menambahkan parameter `start_time_obj` untuk menangani waktu mulai yang dinamis ---
 @st.cache_data
-def parse_shopee_data(raw_lines):
+def parse_shopee_data(raw_lines, start_time_obj):
     """Fungsi utama untuk mem-parsing data mentah menjadi DataFrame yang bersih."""
     records = []
-    time_slots = [(datetime.strptime("00:00", "%H:%M") + timedelta(minutes=15*i)).strftime("%H:%M") for i in range(96)]
+    base_datetime = datetime.combine(datetime.today(), start_time_obj)
 
     for line in raw_lines:
         line = line.strip()
@@ -80,6 +95,16 @@ def parse_shopee_data(raw_lines):
             continue
         if any(k in line.upper() for k in ["BELUM MENDAFTAR", "BELUM ADA IKLAN", "TOTAL", "PAUSED", "ONGOING"]):
             continue
+
+        parts = line.split("\t")
+        
+        # --- PERUBAHAN: Logika fleksibel untuk jumlah kolom interval ---
+        if len(parts) < 6: # Harus ada minimal 5 kolom header + 1 kolom interval
+            st.warning(f"Melewatkan baris karena tidak memiliki cukup kolom: '{line[:70]}...'")
+            continue
+
+        studio = parts[0].strip()
+        username = parts[1].strip()
 
         try:
             saldo = float(str(parts[2]).replace(".", "").replace(",", "") or 0)
@@ -90,6 +115,11 @@ def parse_shopee_data(raw_lines):
 
         interval_blocks = parts[5:]
         intervals = []
+
+        # --- PERUBAHAN: Membuat slot waktu dinamis berdasarkan jumlah data yang ada ---
+        num_intervals = len(interval_blocks)
+        time_slots = [(base_datetime + timedelta(minutes=15*i)).strftime("%H:%M") for i in range(num_intervals)]
+
 
         for block in interval_blocks:
             subparts = [x.strip() for x in block.replace(" | ", "|").split("|")]
@@ -138,15 +168,15 @@ def parse_shopee_data(raw_lines):
 # === Proses Data Jika Ada ===
 if lines:
     try:
-        df = parse_shopee_data(lines)
+        # --- PERUBAHAN: Mengirimkan `start_time` ke fungsi parsing ---
+        df = parse_shopee_data(lines, start_time)
         if df.empty:
             st.warning("Tidak ada data valid yang dapat diproses. Periksa kembali format data Anda.")
         else:
             st.success(f"✅ Data berhasil diparsing! {len(df['Username'].unique())} akun ditemukan.")
 
-            # --- Sidebar & Filter ---
-            st.sidebar.title("🧭 Navigasi & Filter")
-            
+            st.sidebar.markdown("---")
+            st.sidebar.title("🧭 Navigasi Halaman")
             all_studios = df['Nama Studio'].unique()
             selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
             
@@ -156,30 +186,33 @@ if lines:
             else:
                 filtered_df = df[df['Nama Studio'].isin(selected_studios)]
             
-            menu = st.sidebar.radio("Pilih Halaman", [
+            menu = st.sidebar.radio("Pilih Halaman Analisis", [
                 "📊 Ringkasan Harian",
                 "💰 Analisis Komisi & Profit",
-                "💡 Simulasi Biaya Ideal (Target ROAS 50)", # --- ENHANCEMENT ---
-                "🔥 Analisis Jam Efektif", # --- ENHANCEMENT ---
+                "💡 Simulasi Biaya Ideal (Target ROAS 50)",
+                "🔥 Analisis Jam Efektif",
                 "✅ AMAN (ROAS ≥ 50)",
                 "🎯 Hampir Aman (ROAS 30–49.9)",
                 "🟠 Perlu Optimasi (ROAS 5-29.9)",
                 "❌ Akun Boncos (ROAS < 5)",
-                "🔍 Detail Per 15 Menit",
+                "🔍 Detail Per Interval",
                 "📈 Grafik & Download"
             ])
 
+            # (Sisa kode tidak perlu diubah, karena sudah bekerja berdasarkan DataFrame yang dihasilkan)
+            # ... (kode dari `daily = filtered_df.groupby...` hingga akhir skrip) ...
+            
             # Hitung ringkasan harian dari data yang sudah difilter
             daily = filtered_df.groupby(["Nama Studio", "Username"]).agg(
-                Penjualan=("Total Penjualan", "mean"),
-                Biaya_Iklan=("Total Biaya Iklan", "mean"),
+                Penjualan=("Total Penjualan", "first"), # Gunakan first karena nilainya sama untuk satu akun
+                Biaya_Iklan=("Total Biaya Iklan", "first"), # Gunakan first
                 Total_Order=("Order", "sum"),
                 Total_Penonton=("Penonton", "sum"),
                 Rata_ROAS=("ROAS", "mean"),
                 Max_ROAS=("ROAS", "max")
             ).reset_index()
 
-            # --- ENHANCEMENT: Hitung KPI Tambahan ---
+            # Hitung KPI Tambahan
             daily["Komisi 5%"] = daily["Penjualan"] * 0.05
             daily["Profit"] = daily["Komisi 5%"] - daily["Biaya_Iklan"]
             daily["AOV"] = (daily["Penjualan"] / daily["Total_Order"].replace(0, 1)).round(0)
@@ -201,9 +234,9 @@ if lines:
 
             # --- Tampilan Halaman ---
             if menu == "📊 Ringkasan Harian":
-                st.subheader("📋 Ringkasan Harian per Akun")
+                st.subheader("📋 Ringkasan Performa Akun")
                 if not daily.empty:
-                    # --- ENHANCEMENT: Metrik Agregat Termasuk Median ---
+                    # Metrik Agregat Termasuk Median
                     total_penjualan = daily["Penjualan"].sum()
                     total_biaya = daily["Biaya_Iklan"].sum()
                     total_profit = daily["Profit"].sum()
@@ -243,7 +276,6 @@ if lines:
                     use_container_width=True
                 )
             
-            # --- ENHANCEMENT: Halaman Simulasi Biaya Ideal ---
             elif menu == "💡 Simulasi Biaya Ideal (Target ROAS 50)":
                 st.subheader("💡 Simulasi Biaya Ideal untuk Mencapai ROAS 50")
                 st.info("Biaya ideal adalah biaya maksimum yang seharusnya dikeluarkan untuk mencapai target ROAS 50 dengan tingkat penjualan saat ini. Selisih negatif (hijau) berarti Anda beriklan secara efisien.")
@@ -259,13 +291,13 @@ if lines:
                     use_container_width=True
                 )
             
-            # --- ENHANCEMENT: Halaman Analisis Jam Efektif ---
             elif menu == "🔥 Analisis Jam Efektif":
                 st.subheader("🔥 Analisis Jam Efektif (Agregat dari Akun Terfilter)")
                 st.info("Gunakan grafik ini untuk melihat jam-jam di mana ROAS paling tinggi dan jumlah order terbanyak, untuk membantu optimasi jadwal iklan.")
                 if filtered_df.empty:
                     st.warning("Pilih studio untuk menampilkan analisis.")
                 else:
+                    # Urutkan berdasarkan Waktu untuk memastikan plot benar
                     hourly_perf = filtered_df.groupby("Waktu").agg(
                         Total_Order=("Order", "sum"),
                         Mean_ROAS=("ROAS", "mean")
@@ -273,34 +305,31 @@ if lines:
 
                     fig, ax1 = plt.subplots(figsize=(14, 6))
                     
-                    # Bar plot for Total Orders (on primary y-axis)
                     color = 'tab:blue'
                     ax1.set_xlabel('Waktu')
                     ax1.set_ylabel('Total Order', color=color)
                     ax1.bar(hourly_perf['Waktu'], hourly_perf['Total_Order'], color=color, alpha=0.6, label='Total Order')
                     ax1.tick_params(axis='y', labelcolor=color)
 
-                    # Line plot for Mean ROAS (on secondary y-axis)
                     ax2 = ax1.twinx() 
                     color = 'tab:red'
                     ax2.set_ylabel('Rata-rata ROAS', color=color)
                     ax2.plot(hourly_perf['Waktu'], hourly_perf['Mean_ROAS'], color=color, marker='o', markersize=4, label='Rata-rata ROAS')
                     ax2.tick_params(axis='y', labelcolor=color)
                     
-                    # Formatting X-axis
-                    tick_positions = np.arange(0, len(hourly_perf['Waktu']), 8) # Show label every 2 hours
+                    # Logika tick yang lebih dinamis
+                    num_ticks = min(len(hourly_perf['Waktu']), 24) # Tampilkan hingga 24 tick
+                    tick_positions = np.linspace(0, len(hourly_perf['Waktu']) - 1, num_ticks, dtype=int)
                     ax1.set_xticks(tick_positions)
-                    ax1.set_xticklabels(hourly_perf['Waktu'][tick_positions], rotation=45)
+                    ax1.set_xticklabels(hourly_perf['Waktu'].iloc[tick_positions], rotation=45, ha="right")
                     
                     fig.tight_layout()
-                    plt.title('Performa Order dan ROAS per 15 Menit')
+                    plt.title('Performa Order dan ROAS per Interval')
                     st.pyplot(fig)
 
-
-            # Halaman Kategori ROAS (Refactored)
             else:
                 columns_to_show = ["Nama Studio", "Username", "Penjualan", "Biaya_Iklan", "Profit", "Rata_ROAS", "Status ROAS", "Status Profit"]
-                data_view = pd.DataFrame() # Initialize empty
+                data_view = pd.DataFrame()
                 
                 page_map = {
                     "❌ Akun Boncos (ROAS < 5)": (daily["Rata_ROAS"] < 5, "💡 Rekomendasi: Pause iklan dan evaluasi ulang produk & target pasar."),
@@ -319,8 +348,8 @@ if lines:
                         st.info(tip)
                         st.dataframe(style_summary_table(data_view[columns_to_show]), use_container_width=True)
 
-            if menu == "🔍 Detail Per 15 Menit":
-                st.subheader("🔍 Detail Per 15 Menit")
+            if menu == "🔍 Detail Per Interval":
+                st.subheader("🔍 Detail Per Interval Waktu")
                 if filtered_df.empty:
                     st.warning("Tidak ada data untuk ditampilkan. Pilih studio terlebih dahulu.")
                 else:
@@ -344,35 +373,33 @@ if lines:
                     fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
                     x_range = range(len(user_data_graph))
 
-                    # ROAS Plot
                     ax[0].plot(x_range, user_data_graph["ROAS"], color="orange", marker="o", markersize=3, label="ROAS")
                     ax[0].axhline(y=50, color="green", linestyle="--", label="Target ROAS 50")
-                    ax[0].set_ylabel("ROAS"); ax[0].set_title(f"ROAS per 15 Menit - {selected_user_graph}")
+                    ax[0].set_ylabel("ROAS"); ax[0].set_title(f"ROAS per Interval - {selected_user_graph}")
                     ax[0].grid(True, alpha=0.3); ax[0].legend()
 
-                    # Penonton Plot
                     ax[1].bar(x_range, user_data_graph["Penonton"], alpha=0.7, color="skyblue", label="Penonton")
                     ax[1].set_ylabel("Penonton"); ax[1].set_xlabel("Waktu"); ax[1].legend()
 
-                    # Format Sumbu X
-                    tick_positions = [i for i in range(0, 96, 12)] # Setiap 3 jam (12 * 15 menit)
-                    tick_labels = [user_data_graph["Waktu"][i] for i in tick_positions]
-                    ax[1].set_xticks(tick_positions); ax[1].set_xticklabels(tick_labels, rotation=45)
+                    num_ticks = min(len(user_data_graph), 24)
+                    tick_positions = np.linspace(0, len(user_data_graph) - 1, num_ticks, dtype=int)
+                    ax[1].set_xticks(tick_positions); 
+                    ax[1].set_xticklabels(user_data_graph['Waktu'].iloc[tick_positions], rotation=45, ha="right")
+
 
                     plt.tight_layout()
                     st.pyplot(fig)
 
-                    # Download
                     st.subheader("📥 Download Data")
                     csv_daily = daily.to_csv(index=False).encode('utf-8')
-                    st.download_button("⬇️ Download CSV (Ringkasan Harian Lengkap)", data=csv_daily, file_name=f"ringkasan_harian_roas.csv", mime="text/csv")
+                    st.download_button("⬇️ Download CSV (Ringkasan Performa)", data=csv_daily, file_name=f"ringkasan_performa_roas.csv", mime="text/csv")
                     
                     csv_detail = user_data_graph.to_csv(index=False).encode('utf-8')
-                    st.download_button("⬇️ Download CSV (Detail 15 Menit Akun Terpilih)", data=csv_detail, file_name=f"{selected_user_graph}_detail_15menit.csv", mime="text/csv")
+                    st.download_button("⬇️ Download CSV (Detail Interval Akun Terpilih)", data=csv_detail, file_name=f"{selected_user_graph}_detail_interval.csv", mime="text/csv")
 
     except Exception as e:
         st.error(f"❌ Terjadi kesalahan saat memproses data: {str(e)}")
-        st.exception(e) # Menampilkan traceback untuk debugging
+        st.exception(e)
 
 else:
-    st.info("Silakan masukkan data untuk memulai analisis.")
+    st.info("Silakan atur 'Pengaturan Input Data' di sidebar dan masukkan data untuk memulai analisis.")
