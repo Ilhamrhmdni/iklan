@@ -108,29 +108,37 @@ if df is not None:
             "Total Biaya Iklan": "sum"
         })
         trend["ROAS"] = trend["Total Penjualan"] / trend["Total Biaya Iklan"]
-
         st.line_chart(trend[["Total Penjualan", "Total Biaya Iklan", "ROAS"]])
 
-    # === Grafik Per Akun (slot 15 menit, jika ada kolom Waktu) ===
+    # === Grafik + Performa Akun Per 15 Menit ===
     if "Waktu" in df.columns:
-        st.subheader("⏱️ Grafik Performa Per 15 Menit")
+        st.subheader("⏱️ Grafik & Performa Akun per 15 Menit")
 
-        akun = st.selectbox("Pilih akun untuk lihat grafik:", df["Username"].unique())
-        akun_data = df[df["Username"] == akun]
+        akun = st.selectbox("Pilih akun:", df["Username"].unique())
+        akun_data = df[df["Username"] == akun].copy()
 
-        # Grafik Biaya, Omset, View
+        # Pastikan urut berdasarkan waktu
+        akun_data = akun_data.sort_values(by="Waktu")
+
+        # --- Grafik Biaya vs Penjualan ---
         fig, ax = plt.subplots(figsize=(12, 5))
         akun_data.set_index("Waktu")[["Total Biaya Iklan", "Total Penjualan"]].plot(ax=ax, marker="o")
-        plt.title(f"Performa Iklan per 15 Menit - {akun}")
-        plt.xlabel("Waktu (slot 15 menit)")
+        plt.title(f"Biaya vs Penjualan per 15 Menit - {akun}")
+        plt.xlabel("Waktu")
         plt.ylabel("Nilai (Rp)")
         st.pyplot(fig)
 
-        # Grafik ROAS
-        if "ROAS" in akun_data.columns:
-            fig2, ax2 = plt.subplots(figsize=(12, 3))
-            akun_data.set_index("Waktu")["ROAS"].plot(ax=ax2, color="orange", marker="x")
-            plt.title(f"ROAS per 15 Menit - {akun}")
-            plt.xlabel("Waktu (slot 15 menit)")
-            plt.ylabel("ROAS")
-            st.pyplot(fig2)
+        # --- Grafik ROAS ---
+        fig2, ax2 = plt.subplots(figsize=(12, 3))
+        akun_data.set_index("Waktu")["ROAS"].plot(ax=ax2, color="orange", marker="x")
+        plt.title(f"ROAS per 15 Menit - {akun}")
+        plt.xlabel("Waktu")
+        plt.ylabel("ROAS")
+        st.pyplot(fig2)
+
+        # --- Tabel Performa Akun ---
+        st.markdown("### 📊 Detail Performa Akun per 15 Menit")
+        if "View" in akun_data.columns:
+            st.dataframe(akun_data[["Waktu", "Total Biaya Iklan", "Total Penjualan", "View", "ROAS"]])
+        else:
+            st.dataframe(akun_data[["Waktu", "Total Biaya Iklan", "Total Penjualan", "ROAS"]])
