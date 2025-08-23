@@ -84,14 +84,33 @@ if df is not None:
     else:
         st.success("Tidak ada akun yang boncos ✅")
 
-    # === Analisis per Studio ===
-    st.subheader("🏢 Analisis Per Studio")
-    studio_summary = df.groupby("Nama Studio").agg({
-        "Total Penjualan": "sum",
-        "Total Biaya Iklan": "sum"
-    })
-    studio_summary["ROAS Studio"] = studio_summary["Total Penjualan"] / studio_summary["Total Biaya Iklan"]
-    st.dataframe(studio_summary)
+    # === Tabel Performa Akun Per 15 Menit ===
+    if "Waktu" in df.columns:
+        st.subheader("📊 Tabel Performa Akun per 15 Menit")
+
+        akun = st.selectbox("Pilih akun:", df["Username"].unique())
+        akun_data = df[df["Username"] == akun].copy().sort_values(by="Waktu")
+
+        if "View" in akun_data.columns:
+            st.dataframe(akun_data[["Waktu", "Total Biaya Iklan", "Total Penjualan", "View", "ROAS"]], use_container_width=True)
+        else:
+            st.dataframe(akun_data[["Waktu", "Total Biaya Iklan", "Total Penjualan", "ROAS"]], use_container_width=True)
+
+        # === Grafik Biaya vs Penjualan ===
+        fig, ax = plt.subplots(figsize=(12, 5))
+        akun_data.set_index("Waktu")[["Total Biaya Iklan", "Total Penjualan"]].plot(ax=ax, marker="o")
+        plt.title(f"Biaya vs Penjualan per 15 Menit - {akun}")
+        plt.xlabel("Waktu")
+        plt.ylabel("Nilai (Rp)")
+        st.pyplot(fig)
+
+        # === Grafik ROAS ===
+        fig2, ax2 = plt.subplots(figsize=(12, 3))
+        akun_data.set_index("Waktu")["ROAS"].plot(ax=ax2, color="orange", marker="x")
+        plt.title(f"ROAS per 15 Menit - {akun}")
+        plt.xlabel("Waktu")
+        plt.ylabel("ROAS")
+        st.pyplot(fig2)
 
     # === Simulasi Budget ===
     st.subheader("🎯 Simulasi Budget")
@@ -109,36 +128,3 @@ if df is not None:
         })
         trend["ROAS"] = trend["Total Penjualan"] / trend["Total Biaya Iklan"]
         st.line_chart(trend[["Total Penjualan", "Total Biaya Iklan", "ROAS"]])
-
-    # === Grafik + Performa Akun Per 15 Menit ===
-    if "Waktu" in df.columns:
-        st.subheader("⏱️ Grafik & Performa Akun per 15 Menit")
-
-        akun = st.selectbox("Pilih akun:", df["Username"].unique())
-        akun_data = df[df["Username"] == akun].copy()
-
-        # Pastikan urut berdasarkan waktu
-        akun_data = akun_data.sort_values(by="Waktu")
-
-        # --- Grafik Biaya vs Penjualan ---
-        fig, ax = plt.subplots(figsize=(12, 5))
-        akun_data.set_index("Waktu")[["Total Biaya Iklan", "Total Penjualan"]].plot(ax=ax, marker="o")
-        plt.title(f"Biaya vs Penjualan per 15 Menit - {akun}")
-        plt.xlabel("Waktu")
-        plt.ylabel("Nilai (Rp)")
-        st.pyplot(fig)
-
-        # --- Grafik ROAS ---
-        fig2, ax2 = plt.subplots(figsize=(12, 3))
-        akun_data.set_index("Waktu")["ROAS"].plot(ax=ax2, color="orange", marker="x")
-        plt.title(f"ROAS per 15 Menit - {akun}")
-        plt.xlabel("Waktu")
-        plt.ylabel("ROAS")
-        st.pyplot(fig2)
-
-        # --- Tabel Performa Akun ---
-        st.markdown("### 📊 Detail Performa Akun per 15 Menit")
-        if "View" in akun_data.columns:
-            st.dataframe(akun_data[["Waktu", "Total Biaya Iklan", "Total Penjualan", "View", "ROAS"]])
-        else:
-            st.dataframe(akun_data[["Waktu", "Total Biaya Iklan", "Total Penjualan", "ROAS"]])
