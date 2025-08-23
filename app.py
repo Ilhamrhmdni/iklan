@@ -75,7 +75,7 @@ def parse_shopee_data(raw_lines):
             continue
 
         parts = line.split("\t")
-        # Validasi jumlah kolom untuk memastikan format benar
+        # Validasi jumlah kolom
         if len(parts) < 101: # 5 kolom utama + 96 interval
             st.warning(f"Melewatkan baris karena format tidak sesuai (ditemukan {len(parts)} kolom, diharapkan 101): '{line[:70]}...'")
             continue
@@ -88,7 +88,6 @@ def parse_shopee_data(raw_lines):
             total_penjualan = float(str(parts[3]).replace(".", "").replace(",", "") or 0)
             total_biaya_iklan = float(str(parts[4]).replace(".", "").replace(",", "") or 0)
         except (ValueError, IndexError):
-            # Jika ada error saat konversi angka, set ke 0
             saldo, total_penjualan, total_biaya_iklan = 0, 0, 0
 
         interval_blocks = parts[5:]
@@ -96,7 +95,6 @@ def parse_shopee_data(raw_lines):
 
         for block in interval_blocks:
             subparts = [x.strip() for x in block.replace(" | ", "|").split("|")]
-            
             if len(subparts) >= 4:
                 try:
                     biaya = float(subparts[0].replace(".", "").replace(",", ""))
@@ -158,13 +156,12 @@ if lines:
             # --- Sidebar & Filter ---
             st.sidebar.title("🧭 Navigasi & Filter")
             
-            # Filter Studio
             all_studios = df['Nama Studio'].unique()
             selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
             
             if not selected_studios:
                 st.sidebar.warning("Pilih minimal satu studio.")
-                filtered_df = pd.DataFrame() # Kosongkan jika tidak ada yg dipilih
+                filtered_df = pd.DataFrame()
             else:
                 filtered_df = df[df['Nama Studio'].isin(selected_studios)]
             
@@ -176,44 +173,41 @@ if lines:
                 "🟠 Perlu Optimasi (ROAS 5-29.9)",
                 "❌ Akun Boncos (ROAS < 5)",
                 "🔍 Detail Per 15 Menit",
-                "📈 Grafik & Download"
+                "📈 Grafik & Download",
+                "🔥 Analisis Jam Efektif",
+                "💡 Simulasi Biaya Ideal"
             ])
 
-            # Hitung ringkasan harian dari data yang sudah difilter
+            # Hitung ringkasan harian
             daily = filtered_df.groupby(["Nama Studio", "Username"]).agg(
                 Penjualan=("Total Penjualan", "mean"),
                 Biaya_Iklan=("Total Biaya Iklan", "mean"),
                 Total_Order=("Order", "sum"),
                 Total_Penonton=("Penonton", "sum"),
                 Rata_ROAS=("ROAS", "mean"),
+                Median_ROAS=("ROAS", "median"),
                 Max_ROAS=("ROAS", "max")
             ).reset_index()
 
-            # Hitung Komisi 5% dan Profit
             daily["Komisi 5%"] = daily["Penjualan"] * 0.05
             daily["Profit"] = daily["Komisi 5%"] - daily["Biaya_Iklan"]
             daily["AOV"] = (daily["Penjualan"] / daily["Total_Order"].replace(0, 1)).round(0)
 
-            # Status Profit
             daily["Status Profit"] = daily["Profit"].apply(lambda p: "✅ Profit" if p > 0 else ("❌ Rugi" if p < 0 else "➖ Break Even"))
             
-            # Status ROAS (Target 50.0)
             def status_roas(r):
                 if r == 0: return "⏸️ Tidak Aktif"
                 if r < 5: return "🔴 Boncos"
                 if r < 30: return "🟠 Perlu Optimasi"
                 if r < 50: return "🟡 Hampir Aman"
                 return "🟢 AMAN (ROAS ≥ 50)"
-
             daily["Status ROAS"] = daily["Rata_ROAS"].apply(status_roas)
 
             # --- Tampilan Halaman ---
-            
             if menu == "📊 Ringkasan Harian":
                 st.subheader("📋 Ringkasan Harian per Akun")
 
                 if not daily.empty:
-                    # Metrik Agregat
                     total_penjualan = daily["Penjualan"].sum()
                     total_biaya = daily["Biaya_Iklan"].sum()
                     total_profit = daily["Profit"].sum()
@@ -227,7 +221,7 @@ if lines:
                 styled_df = daily.style.format({
                     "Penjualan": format_rupiah, "Biaya_Iklan": format_rupiah, "Komisi 5%": format_rupiah,
                     "Profit": format_rupiah, "Total_Order": format_order, "Total_Penonton": format_order,
-                    "Rata_ROAS": "{:.2f}", "Max_ROAS": "{:.2f}", "AOV": format_rupiah
+                    "Rata_ROAS": "{:.2f}", "Median_ROAS": "{:.2f}", "Max_ROAS": "{:.2f}", "AOV": format_rupiah
                 }).background_gradient(cmap="RdYlGn", subset=["Rata_ROAS"], vmin=0, vmax=60)
                 st.dataframe(styled_df, use_container_width=True)
 
@@ -246,9 +240,8 @@ if lines:
                     use_container_width=True
                 )
             
-            # Halaman Kategori ROAS
-            else:
-                columns_to_show = ["Nama Studio", "Username", "Penjualan", "Komisi 5%", "Biaya_Iklan", "Profit", "Rata_ROAS", "Status ROAS", "Status Profit"]
+            elif menu in ["❌ Akun Boncos (ROAS < 5)", "🟠 Perlu Optimasi (ROAS 5-29.9)", "🎯 Hampir Aman (ROAS 30–49.9)", "✅ AMAN (ROAS ≥ 50)"]:
+                columns_to_show = ["Nama Studio", "Username", "Penjualan", "Komisi 5%", "Biaya_Iklan", "Profit", "Rata_ROAS", "Median_ROAS", "Status ROAS", "Status Profit"]
                 
                 if menu == "❌ Akun Boncos (ROAS < 5)":
                     st.subheader("❌ Akun Boncos (ROAS < 5)")
@@ -274,11 +267,10 @@ if lines:
                     if data_view.empty: st.warning("Belum ada akun yang mencapai target ROAS ≥ 50.")
                     else: st.success("🎉 Hebat! Akun-akun ini sudah mencapai target.")
                 
-                # Tampilkan tabel jika data ada
                 if 'data_view' in locals() and not data_view.empty:
                     st.dataframe(style_summary_table(data_view[columns_to_show]), use_container_width=True)
 
-            if menu == "🔍 Detail Per 15 Menit":
+            elif menu == "🔍 Detail Per 15 Menit":
                 st.subheader("🔍 Detail Per 15 Menit")
                 if filtered_df.empty:
                     st.warning("Tidak ada data untuk ditampilkan. Pilih studio terlebih dahulu.")
@@ -303,25 +295,21 @@ if lines:
                     fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
                     x_range = range(len(user_data_graph))
 
-                    # ROAS Plot
                     ax[0].plot(x_range, user_data_graph["ROAS"], color="orange", marker="o", markersize=3, label="ROAS")
                     ax[0].axhline(y=50, color="green", linestyle="--", label="Target ROAS 50")
                     ax[0].set_ylabel("ROAS"); ax[0].set_title(f"ROAS per 15 Menit - {selected_user_graph}")
                     ax[0].grid(True, alpha=0.3); ax[0].legend()
 
-                    # Penonton Plot
                     ax[1].bar(x_range, user_data_graph["Penonton"], alpha=0.7, color="skyblue", label="Penonton")
                     ax[1].set_ylabel("Penonton"); ax[1].set_xlabel("Waktu"); ax[1].legend()
 
-                    # Format Sumbu X
-                    tick_positions = [i for i in range(0, 96, 12)] # Setiap 3 jam (12 * 15 menit)
+                    tick_positions = [i for i in range(0, 96, 12)]
                     tick_labels = [user_data_graph["Waktu"][i] for i in tick_positions]
                     ax[1].set_xticks(tick_positions); ax[1].set_xticklabels(tick_labels, rotation=45)
 
                     plt.tight_layout()
                     st.pyplot(fig)
 
-                    # Download
                     st.subheader("📥 Download Data")
                     csv_daily = daily.to_csv(index=False).encode('utf-8')
                     st.download_button("⬇️ Download CSV (Ringkasan Harian)", data=csv_daily, file_name=f"ringkasan_harian_roas.csv", mime="text/csv")
@@ -329,8 +317,13 @@ if lines:
                     csv_detail = user_data_graph.to_csv(index=False).encode('utf-8')
                     st.download_button("⬇️ Download CSV (Detail 15 Menit Akun Terpilih)", data=csv_detail, file_name=f"{selected_user_graph}_detail_15menit.csv", mime="text/csv")
 
-    except Exception as e:
-        st.error(f"❌ Terjadi kesalahan saat memproses data: {str(e)}")
+            elif menu == "🔥 Analisis Jam Efektif":
+                st.subheader("🔥 Heatmap Jam Efektif (ROAS & Order)")
 
-else:
-    st.info("Silakan masukkan data untuk memulai analisis.")
+                if filtered_df.empty:
+                    st.warning("Tidak ada data untuk ditampilkan. Pilih studio terlebih dahulu.")
+                else:
+                    import seaborn as sns
+                    filtered_df["Jam"] = pd.to_datetime(filtered_df["Waktu"], format="%H:%M").dt.hour
+
+                    pivot_roas = filtered_df.pivot_table(index="Jam",
