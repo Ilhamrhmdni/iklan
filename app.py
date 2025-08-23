@@ -1,109 +1,84 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Dashboard Iklan Shopee", layout="wide")
-st.title("📊 Dashboard Monitoring Iklan Shopee (Per 15 Menit)")
+st.set_page_config(page_title="Analisis ROAS Shopee", layout="wide")
+st.title("📊 Analisis ROAS Shopee (Boncos / Aman)")
 
-# Pilih mode input
+# === Input data ===
 mode = st.radio("Pilih cara input data:", ["Upload File", "Paste Manual"])
 
 df = None
 
-# === MODE 1: Upload File ===
+# MODE 1: Upload File
 if mode == "Upload File":
-    uploaded_file = st.file_uploader("Upload file laporan (.xlsx atau .csv)", type=["xlsx", "csv"])
+    uploaded_file = st.file_uploader("Upload file (.xlsx atau .csv)", type=["xlsx", "csv"])
     if uploaded_file:
         if uploaded_file.name.endswith("csv"):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
 
-# === MODE 2: Paste Manual ===
+# MODE 2: Paste Manual
 elif mode == "Paste Manual":
     raw_data = st.text_area(
-        "Paste data di sini persis dari laporan Shopee (format panjang dengan pemisah tab/spasi)",
+        "Paste data tabel Shopee (pisahkan kolom dengan TAB / copy langsung dari Excel)",
         height=300,
-        placeholder="Contoh:\nSTUDIO SURABAYA\takun1\t10000\t500000\t20000\t0 | 0 | 0% | 0\t516 | 0 | 0% | 3 ..."
+        placeholder="Contoh:\nSTUDIO SURABAYA\tgrosirpakaianadalamsby\t15775\t2584462\t61581"
     )
-
     if raw_data:
         try:
             rows = []
             for line in raw_data.strip().split("\n"):
-                parts = line.split("\t")  # pisah tab (copy dari excel biasanya tab)
-                if len(parts) < 6:
+                parts = line.split("\t")
+                if len(parts) < 5: 
                     continue
-
-                studio, username = parts[0], parts[1]
-
-                # data per 15 menit mulai dari kolom ke-5
-                slot_data = parts[5:]
-                waktu = 1
-                for slot in slot_data:
-                    try:
-                        biaya, omset, rate, view = [s.strip().replace("%", "").replace("-", "0") for s in slot.split("|")]
-                        rows.append([
-                            studio, username, waktu,
-                            float(biaya), float(omset), float(rate), float(view)
-                        ])
-                        waktu += 1
-                    except:
-                        continue
-
-            df = pd.DataFrame(rows, columns=["Studio", "Username", "Waktu", "Biaya", "Omset", "Rate (%)", "View"])
+                studio, username, saldo, penjualan, biaya = parts[:5]
+                rows.append([
+                    studio,
+                    username,
+                    float(str(saldo).replace(".", "").replace(",", "")) if saldo else 0,
+                    float(str(penjualan).replace(".", "").replace(",", "")) if penjualan else 0,
+                    float(str(biaya).replace(".", "").replace(",", "")) if biaya else 0
+                ])
+            df = pd.DataFrame(rows, columns=["Nama Studio", "Username", "Saldo", "Total Penjualan", "Total Biaya Iklan"])
         except Exception as e:
             st.error(f"Gagal parsing data: {e}")
 
-# === Kalau ada data ===
+# === Analisis Data ===
 if df is not None:
-    st.success("✅ Data berhasil diproses")
-    st.dataframe(df, use_container_width=True)
+    # Hitung ROAS
+    df["ROAS"] = df.apply(
+        lambda x: (x["Total Penjualan"] / x["Total Biaya Iklan"]) if x["Total Biaya Iklan"] > 0 else 0, axis=1
+    )
 
-    # === Ringkasan global ===
-    st.subheader("📌 Ringkasan")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Biaya Iklan", f"{df['Biaya'].sum():,.0f}")
-    col2.metric("Total Omset", f"{df['Omset'].sum():,.0f}")
-    col3.metric("Rata-rata Efektivitas", f"{df['Rate (%)'].mean():.2f}%")
-    col4.metric("Total View", f"{df['View'].sum():,.0f}")
-
-    # === Ringkasan per akun ===
-    st.subheader("🏢 Ringkasan Per Akun")
-    summary = df.groupby("Username").agg({
-        "Biaya": "sum",
-        "Omset": "sum",
-        "Rate (%)": "mean",
-        "View": "sum"
-    }).reset_index()
-    summary["ROAS"] = summary.apply(lambda x: x["Omset"] / x["Biaya"] if x["Biaya"] > 0 else 0, axis=1)
-
+    # Status
     def status_roas(roas):
-        if roas < 30:
+        if roas < 30 and roas > 0:
             return "❌ Boncos"
         elif roas < 50:
             return "⚠️ Rawan"
-        else:
+        elif roas >= 50:
             return "✅ Aman"
+        else:
+            return "-"
+    df["Status"] = df["ROAS"].apply(status_roas)
 
-    summary["Status"] = summary["ROAS"].apply(status_roas)
+    # Tampilkan tabel
+    st.subheader("📋 Hasil Analisis")
+    st.dataframe(df, use_container_width=True)
+
+    # Ringkasan studio
+    st.subheader("🏢 Ringkasan Per Studio")
+    summary = df.groupby("Nama Studio").agg({
+        "Total Penjualan": "sum",
+        "Total Biaya Iklan": "sum"
+    })
+    summary["ROAS Studio"] = summary["Total Penjualan"] / summary["Total Biaya Iklan"]
     st.dataframe(summary, use_container_width=True)
 
-    # === Grafik per akun ===
-    akun = st.selectbox("Pilih akun untuk detail grafik:", df["Username"].unique())
-    akun_data = df[df["Username"] == akun]
-
-    st.subheader(f"📈 Grafik Tren - {akun}")
-    fig, ax = plt.subplots(figsize=(12, 5))
-    akun_data.set_index("Waktu")[["Biaya", "Omset", "View"]].plot(ax=ax, marker="o")
-    plt.title(f"Performa Iklan per 15 Menit - {akun}")
-    plt.xlabel("Waktu (slot 15 menit)")
-    plt.ylabel("Nilai")
-    st.pyplot(fig)
-
-    fig2, ax2 = plt.subplots(figsize=(12, 3))
-    akun_data.set_index("Waktu")["Rate (%)"].plot(ax=ax2, color="orange", marker="x")
-    plt.title(f"Efektivitas Rate % per 15 Menit - {akun}")
-    plt.xlabel("Waktu (slot 15 menit)")
-    plt.ylabel("Rate %")
-    st.pyplot(fig2)
+    # Ringkasan angka besar
+    st.subheader("📌 Ringkasan Keseluruhan")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Penjualan", f"{df['Total Penjualan'].sum():,.0f}")
+    col2.metric("Total Biaya Iklan", f"{df['Total Biaya Iklan'].sum():,.0f}")
+    col3.metric("ROAS Rata-rata", f"{df['ROAS'].mean():.2f}")
