@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(page_title="📊 Analisis ROAS Shopee", layout="wide")
-st.title("📈 Analisis Data Iklan Shopee - Per 15 Menit")
+st.title("📈 Analisis Data Iklan Shopee - Target ROAS 50.0")
 
 st.markdown("""
 **Format Data:**  
@@ -120,7 +120,7 @@ def parse_shopee_data(raw_lines):
         lambda g: g["Total Penjualan"].iloc[0] / g["Order"].sum() if g["Order"].sum() > 0 else 0
     ).to_dict()
 
-    # Hitung ROAS
+    # Hitung ROAS: (Order × AOV) / Biaya
     def calc_roas(row):
         aov = aov_map.get(row["Username"], 0)
         revenue = row["Order"] * aov
@@ -137,7 +137,7 @@ if 'lines' in locals() and len(lines) > 0:
         df = parse_shopee_data(lines)
         st.success(f"✅ Data berhasil diparsing! {len(df['Username'].unique())} akun ditemukan.")
 
-        # Hitung daily summary
+        # Hitung ringkasan harian
         daily = df.groupby(["Nama Studio", "Username"]).agg(
             Penjualan=("Total Penjualan", "mean"),
             Biaya_Iklan=("Total Biaya Iklan", "mean"),
@@ -147,13 +147,18 @@ if 'lines' in locals() and len(lines) > 0:
             Max_ROAS=("ROAS", "max")
         ).reset_index()
 
-        # Status ROAS
+        # --- Status berdasarkan ROAS 50.0 ---
         def status(r):
-            if r == 0: return "⏸️ Tidak Aktif"
-            elif r < 5: return "🔴 Boncos"
-            elif r < 30: return "🟠 Perlu Optimasi"
-            elif r < 50: return "🟡 Hampir Aman"
-            else: return "🟢 Aman"
+            if r == 0:
+                return "⏸️ Tidak Aktif"
+            elif r < 5:
+                return "🔴 Boncos"
+            elif r < 30:
+                return "🟠 Perlu Optimasi"
+            elif r < 50:
+                return "🟡 Hampir Aman"
+            else:
+                return "🟢 AMAN (ROAS ≥ 50)"
 
         daily["Status"] = daily["Rata_ROAS"].apply(status)
         daily["AOV"] = (daily["Penjualan"] / daily["Total_Order"].replace(0, 1)).round(0)
@@ -176,7 +181,9 @@ if 'lines' in locals() and len(lines) > 0:
         st.sidebar.title("🧭 Navigasi")
         menu = st.sidebar.radio("Pilih Halaman", [
             "📊 Ringkasan Harian",
-            "❌ Akun Boncos",
+            "❌ Akun Boncos (ROAS < 5)",
+            "🎯 Hampir Aman (ROAS 30–49.9)",
+            "✅ AMAN (ROAS ≥ 50)",
             "🔍 Detail Per 15 Menit",
             "📈 Grafik & Download"
         ])
@@ -184,7 +191,6 @@ if 'lines' in locals() and len(lines) > 0:
         # --- 1. Ringkasan Harian ---
         if menu == "📊 Ringkasan Harian":
             st.subheader("📋 Ringkasan Harian per Akun")
-
             styled_df = daily.style.format({
                 "Penjualan": format_rupiah,
                 "Biaya_Iklan": format_rupiah,
@@ -194,11 +200,10 @@ if 'lines' in locals() and len(lines) > 0:
                 "Max_ROAS": "{:.2f}",
                 "AOV": format_rupiah
             }).background_gradient(cmap="RdYlGn_r", subset=["Rata_ROAS"])
-
             st.dataframe(styled_df, use_container_width=True)
 
-        # --- 2. Akun Boncos ---
-        elif menu == "❌ Akun Boncos":
+        # --- 2. Akun Boncos (ROAS < 5) ---
+        elif menu == "❌ Akun Boncos (ROAS < 5)":
             st.subheader("❌ Akun Boncos (ROAS < 5)")
             boncos = daily[daily["Rata_ROAS"] < 5]
             if len(boncos) > 0:
@@ -210,16 +215,49 @@ if 'lines' in locals() and len(lines) > 0:
                     }),
                     use_container_width=True
                 )
-                st.warning("💡 Rekomendasi: Pause iklan & evaluasi ulang konten, harga, atau target.")
+                st.warning("💡 Rekomendasi: Pause iklan dan evaluasi ulang produk & konten.")
             else:
-                st.success("✅ Tidak ada akun boncos (ROAS ≥ 5 semua).")
+                st.success("✅ Tidak ada akun dengan ROAS < 5.")
 
-        # --- 3. Detail Per 15 Menit ---
+        # --- 3. Hampir Aman (ROAS 30–49.9) ---
+        elif menu == "🎯 Hampir Aman (ROAS 30–49.9)":
+            st.subheader("🎯 Hampir Aman (ROAS 30 – 49.9)")
+            hampir_aman = daily[(daily["Rata_ROAS"] >= 30) & (daily["Rata_ROAS"] < 50)]
+            if len(hampir_aman) > 0:
+                st.dataframe(
+                    hampir_aman[["Nama Studio", "Username", "Penjualan", "Biaya_Iklan", "Rata_ROAS", "Status"]].style.format({
+                        "Penjualan": format_rupiah,
+                        "Biaya_Iklan": format_rupiah,
+                        "Rata_ROAS": "{:.2f}"
+                    }),
+                    use_container_width=True
+                )
+                st.info("💡 Tips: Optimasi iklan sedikit lagi untuk tembus ROAS 50!")
+            else:
+                st.success("🎉 Semua akun sudah mencapai atau melebihi ROAS 50!")
+
+        # --- 4. AMAN (ROAS ≥ 50) ---
+        elif menu == "✅ AMAN (ROAS ≥ 50)":
+            st.subheader("✅ Akun AMAN (ROAS ≥ 50.0)")
+            aman = daily[daily["Rata_ROAS"] >= 50]
+            if len(aman) > 0:
+                st.dataframe(
+                    aman[["Nama Studio", "Username", "Penjualan", "Biaya_Iklan", "Rata_ROAS", "Status"]].style.format({
+                        "Penjualan": format_rupiah,
+                        "Biaya_Iklan": format_rupiah,
+                        "Rata_ROAS": "{:.2f}"
+                    }),
+                    use_container_width=True
+                )
+                st.success("🎉 Hebat! Akun-akun ini sudah mencapai target ROAS 50.0+")
+            else:
+                st.warning("Belum ada akun yang mencapai ROAS ≥ 50. Butuh optimasi lebih lanjut.")
+
+        # --- 5. Detail Per 15 Menit ---
         elif menu == "🔍 Detail Per 15 Menit":
             st.subheader("🔍 Detail Per 15 Menit")
             selected_user = st.selectbox("Pilih akun:", df["Username"].unique())
             user_data = df[df["Username"] == selected_user].copy()
-
             st.dataframe(
                 user_data[["Waktu", "Penonton", "Order", "Biaya Iklan", "ROAS"]].style.format({
                     "Penonton": "{:,}",
@@ -230,9 +268,9 @@ if 'lines' in locals() and len(lines) > 0:
                 use_container_width=True
             )
 
-        # --- 4. Grafik & Download ---
+        # --- 6. Grafik & Download ---
         elif menu == "📈 Grafik & Download":
-            st.subheader("📈 Grafik Performa")
+            st.subheader("📈 Grafik Performa (ROAS & Penonton)")
             selected_user = st.selectbox("Pilih akun untuk grafik:", df["Username"].unique())
             user_data = df[df["Username"] == selected_user].copy().reset_index(drop=True)
 
@@ -241,6 +279,7 @@ if 'lines' in locals() and len(lines) > 0:
 
             # ROAS
             ax[0].plot(x_range, user_data["ROAS"], color="orange", marker="o", markersize=3, label="ROAS")
+            ax[0].axhline(y=50, color="green", linestyle="--", label="Target ROAS 50")
             ax[0].set_ylabel("ROAS")
             ax[0].set_title(f"ROAS per 15 Menit - {selected_user}")
             ax[0].grid(True, alpha=0.3)
@@ -272,7 +311,7 @@ if 'lines' in locals() and len(lines) > 0:
             )
 
     except Exception as e:
-        st.error(f"❌ Terjadi kesalahan saat memproses data: {str(e)}")
+        st.error(f"❌ Terjadi kesalahan saat memproses  {str(e)}")
 
 else:
     st.info("Silakan masukkan data untuk memulai analisis.")
