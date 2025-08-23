@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Analisis ROAS Shopee", layout="wide")
 st.title("📊 Analisis ROAS Shopee (Boncos / Aman)")
 
-# === Input data ===
+# === Input Data ===
 mode = st.radio("Pilih cara input data:", ["Upload File", "Paste Manual"])
 
 df = None
@@ -51,7 +52,7 @@ if df is not None:
         lambda x: (x["Total Penjualan"] / x["Total Biaya Iklan"]) if x["Total Biaya Iklan"] > 0 else 0, axis=1
     )
 
-    # Status
+    # Status ROAS
     def status_roas(roas):
         if roas < 30 and roas > 0:
             return "❌ Boncos"
@@ -63,11 +64,19 @@ if df is not None:
             return "-"
     df["Status"] = df["ROAS"].apply(status_roas)
 
-    # Tampilkan tabel utama
+    # === Ringkasan Utama ===
+    st.subheader("📌 Ringkasan Keseluruhan")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Penjualan", f"{df['Total Penjualan'].sum():,.0f}")
+    col2.metric("Total Biaya Iklan", f"{df['Total Biaya Iklan'].sum():,.0f}")
+    col3.metric("Rata-rata ROAS", f"{df['ROAS'].mean():.2f}")
+    col4.metric("Jumlah Akun Boncos", f"{(df['ROAS'] < 30).sum()}")
+
+    # === Tabel Utama ===
     st.subheader("📋 Hasil Analisis")
     st.dataframe(df, use_container_width=True)
 
-    # Daftar akun boncos
+    # === Daftar akun boncos ===
     st.subheader("❌ Daftar Akun Boncos (ROAS < 30)")
     boncos_df = df[df["Status"] == "❌ Boncos"]
     if not boncos_df.empty:
@@ -75,9 +84,29 @@ if df is not None:
     else:
         st.success("Tidak ada akun yang boncos ✅")
 
-    # Ringkasan angka besar
-    st.subheader("📌 Ringkasan Keseluruhan")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Penjualan", f"{df['Total Penjualan'].sum():,.0f}")
-    col2.metric("Total Biaya Iklan", f"{df['Total Biaya Iklan'].sum():,.0f}")
-    col3.metric("ROAS Rata-rata", f"{df['ROAS'].mean():.2f}")
+    # === Analisis per Studio ===
+    st.subheader("🏢 Analisis Per Studio")
+    studio_summary = df.groupby("Nama Studio").agg({
+        "Total Penjualan": "sum",
+        "Total Biaya Iklan": "sum"
+    })
+    studio_summary["ROAS Studio"] = studio_summary["Total Penjualan"] / studio_summary["Total Biaya Iklan"]
+    st.dataframe(studio_summary)
+
+    # === Simulasi Budget ===
+    st.subheader("🎯 Simulasi Budget")
+    simulasi = st.slider("Pengurangan biaya iklan (%)", 0, 100, 20)
+    df["Simulasi Biaya"] = df["Total Biaya Iklan"] * (1 - simulasi / 100)
+    df["Simulasi ROAS"] = df["Total Penjualan"] / df["Simulasi Biaya"].replace(0, 1)
+    st.dataframe(df[["Username", "Total Penjualan", "Total Biaya Iklan", "Simulasi Biaya", "Simulasi ROAS"]])
+
+    # === Tren Harian (jika ada kolom tanggal) ===
+    if "Tanggal" in df.columns:
+        st.subheader("📈 Tren Harian")
+        trend = df.groupby("Tanggal").agg({
+            "Total Penjualan": "sum",
+            "Total Biaya Iklan": "sum"
+        })
+        trend["ROAS"] = trend["Total Penjualan"] / trend["Total Biaya Iklan"]
+
+        st.line_chart(trend[["Total Penjualan", "Total Biaya Iklan", "ROAS"]])
