@@ -63,18 +63,17 @@ if df is not None:
             return "-"
     df["Status"] = df["ROAS"].apply(status_roas)
 
-    # Tampilkan tabel
+    # Tampilkan tabel utama
     st.subheader("📋 Hasil Analisis")
     st.dataframe(df, use_container_width=True)
 
-    # Ringkasan studio
-    st.subheader("🏢 Ringkasan Per Studio")
-    summary = df.groupby("Nama Studio").agg({
-        "Total Penjualan": "sum",
-        "Total Biaya Iklan": "sum"
-    })
-    summary["ROAS Studio"] = summary["Total Penjualan"] / summary["Total Biaya Iklan"]
-    st.dataframe(summary, use_container_width=True)
+    # Daftar akun boncos
+    st.subheader("❌ Daftar Akun Boncos (ROAS < 30)")
+    boncos_df = df[df["Status"] == "❌ Boncos"]
+    if not boncos_df.empty:
+        st.dataframe(boncos_df, use_container_width=True)
+    else:
+        st.success("Tidak ada akun yang boncos ✅")
 
     # Ringkasan angka besar
     st.subheader("📌 Ringkasan Keseluruhan")
