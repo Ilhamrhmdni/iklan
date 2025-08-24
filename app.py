@@ -5,12 +5,11 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, time
 
 # --- Konfigurasi Halaman ---
-st.set_page_config(page_title="📊 Analisis ROAS Shopee Fleksibel", layout="wide")
-st.title("📈 Analisis Data Iklan Shopee Fleksibel")
+st.set_page_config(page_title="📊 Analisis ROAS Shopee", layout="wide")
+st.title("📈 Analisis Data Iklan Shopee")
 
 st.markdown("""
-**Format Data:** `Nama Studio | Username | Saldo | Penjualan | Biaya Iklan | [Biaya|Order|Efektivitas|Penonton] ...`
-Aplikasi ini sekarang dapat menerima jumlah interval data yang fleksibel.
+**Format Data:** `Paste Data Dari Menu Histori`
 """)
 
 # === Input Data ===
