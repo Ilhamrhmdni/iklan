@@ -41,9 +41,9 @@ if mode == "Upload File":
 # --- MODE 2: Paste Manual ---
 elif mode == "Paste Manual":
     raw_data = st.text_area(
-        "Paste data dari Excel/Notepad (gunakan TAB antar kolom)",
+        "Paste data dari Menu Histori",
         height=300,
-        placeholder="Contoh:\nSTUDIO SURABAYA\tgrosir...\t14.589\t2.584.462\t62.311\t0|0|0%|0\t562|0|0%|5\t..."
+        placeholder="Contoh:\nNama Studio\tNama Akun\tSaldo\tPenjualan\tBiaya Iklan\t0|0|0%|0\t562|0|0%|5\t..."
     )
     if raw_data.strip():
         lines = [line.strip() for line in raw_data.split("\n") if line.strip()]
