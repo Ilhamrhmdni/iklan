@@ -83,7 +83,7 @@ def parse_summary_data(raw_lines):
 
             # Kalkulasi langsung di sini
             roas = penjualan / biaya_iklan if biaya_iklan > 0 else 0
-            komisi = penjualan * 0.05
+            komisi = penjualan * 0.02
             profit = komisi - biaya_iklan
 
             records.append({
