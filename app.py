@@ -6,6 +6,11 @@ import numpy as np
 st.set_page_config(page_title="📊 Analisis ROAS Shopee", layout="wide")
 st.title("📈 Analisis Data Iklan Shopee (Ringkasan)")
 
+st.markdown("""
+**Aplikasi ini dirancang untuk membaca data ringkasan dari Shopee.**
+**Format Data yang Diharapkan:** `Nama Studio | Username | Saldo | Total Penjualan | Total Biaya Iklan`
+""")
+
 # === Input Data ===
 mode = st.radio("Pilih Cara Input", ["Upload File", "Paste Manual"])
 
@@ -21,9 +26,9 @@ if mode == "Upload File":
 # --- MODE 2: Paste Manual ---
 elif mode == "Paste Manual":
     raw_data = st.text_area(
-        "Paste data dari Menu Histori Iklan",
+        "Paste data dari Excel/Notepad (gunakan TAB antar kolom)",
         height=300,
-        placeholder="Contoh:\nNama Studio\tNama Akun\tSaldo Iklan\tPenjualan Iklan\tBiaya Iklan"
+        placeholder="Contoh:\nSTUDIO SURABAYA FASHION PRIA\tgrosirpakaiandansby\t16.692\t70.675.342\t1.661.067"
     )
     if raw_data.strip():
         lines = [line.strip() for line in raw_data.split("\n") if line.strip()]
@@ -147,11 +152,26 @@ if lines:
                     total_penjualan = filtered_df["Penjualan"].sum()
                     total_biaya = filtered_df["Biaya_Iklan"].sum()
                     total_profit = filtered_df["Profit"].sum()
-                    
-                    col1, col2, col3 = st.columns(3)
+
+                    # === Tambahan Data Baru ===
+                    total_rugi = filtered_df.loc[filtered_df["Profit"] < 0, "Profit"].sum()
+                    jumlah_profit = (filtered_df["Profit"] > 0).sum()
+                    jumlah_rugi = (filtered_df["Profit"] < 0).sum()
+                    rata_roas = filtered_df["ROAS"].mean()
+
+                    col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Total Penjualan", format_rupiah(total_penjualan))
                     col2.metric("Total Biaya Iklan", format_rupiah(total_biaya))
                     col3.metric("Estimasi Total Profit", format_rupiah(total_profit), delta_color=("inverse" if total_profit < 0 else "normal"))
+                    col4.metric("Total Kerugian", format_rupiah(total_rugi), delta_color="inverse")
+
+                    st.markdown("---")
+
+                    col5, col6, col7 = st.columns(3)
+                    col5.metric("Jumlah Akun Profit", jumlah_profit)
+                    col6.metric("Jumlah Akun Rugi", jumlah_rugi)
+                    col7.metric("Rata-rata ROAS", f"{rata_roas:.2f}x")
+
                     st.markdown("---")
 
                     # Tampilkan tabel dengan styling
