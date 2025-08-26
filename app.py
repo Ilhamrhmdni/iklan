@@ -1,126 +1,115 @@
 import streamlit as st
 import pandas as pd
-import re
-from io import StringIO
+import numpy as np
 import logging
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-st.set_page_config(page_title="Analisis ROI Shopee", layout="wide")
-st.title("📊 Analisis ROI Shopee")
+st.set_page_config(page_title="Analisis Komisi & Iklan", layout="wide")
+st.title("📊 Analisis Komisi Harian vs Biaya Iklan")
 
-# Fungsi parsing data komisi
-def split_data(cell):
-    if pd.isna(cell) or str(cell).strip() in ["0", "0 - 0 (D)"]:
-        return pd.Series([0, 0, None])
-    match = re.match(r"([\d\.]+)\s*-\s*([\d\.]+)\s*\((.*?)\)", str(cell))
-    if match:
-        return pd.Series([
-            int(match.group(1).replace(".", "")), 
-            int(match.group(2).replace(".", "")), 
-            match.group(3)
-        ])
-    return pd.Series([0, 0, None])
-
-# Styling ROI
-def color_roi(val):
-    if pd.isna(val) or val == 0:
-        return "color: black"
-    if val >= 200:
-        g = min(255, int(255 - (min(val, 600) - 200) * 0.6))
-        return f"background-color: rgb(0,{g},0); color:white;"
-    else:
-        r = min(255, int(255 - max(val, 0) * 0.8))
-        return f"background-color: rgb(255,{r},{r}); color:white;"
-
-# Input data
-st.subheader("📥 Paste Data Komisi Harian (copy dari Excel)")
-komisi_text = st.text_area("Paste data komisi harian di sini")
-
-st.subheader("📥 Paste Data Biaya Iklan (copy dari Excel)")
-iklan_text = st.text_area("Paste data biaya iklan di sini")
-
-if komisi_text and iklan_text:
+def load_data(file, file_type="komisi"):
     try:
-        df_komisi = pd.read_csv(StringIO(komisi_text), sep="\t")
-        df_iklan = pd.read_csv(StringIO(iklan_text), sep="\t")
+        df = pd.read_excel(file) if file.name.endswith(".xlsx") else pd.read_csv(file, sep="\t")
 
-        # Normalisasi nama kolom → lowercase semua
-        df_komisi.columns = df_komisi.columns.str.strip().str.lower()
-        df_iklan.columns = df_iklan.columns.str.strip().str.lower()
+        # Hilangkan spasi di nama kolom
+        df.columns = df.columns.str.strip()
 
-        # Mapping agar seragam
-        rename_map = {
-            "studio": "studio",
-            "nama studio": "studio",
-            "username": "username",
-            "total biaya iklan": "biaya iklan",
-            "biaya iklan": "biaya iklan"
-        }
-        df_komisi.rename(columns=rename_map, inplace=True)
-        df_iklan.rename(columns=rename_map, inplace=True)
+        # Samakan nama kolom agar konsisten
+        if file_type == "biaya" and "Nama Studio" in df.columns:
+            df = df.rename(columns={"Nama Studio": "Studio"})
 
-        # Debug tampilkan kolom
-        st.write("### 🔍 Kolom Komisi:", df_komisi.columns.tolist())
-        st.write("### 🔍 Kolom Iklan:", df_iklan.columns.tolist())
-
-        # Cari kolom tanggal
-        tanggal_cols = [col for col in df_komisi.columns if "-" in col]
-        tanggal_cols_sorted = sorted(tanggal_cols, key=lambda x: pd.to_datetime(x, dayfirst=True, errors="coerce"))
-
-        if not tanggal_cols_sorted:
-            st.error("❌ Tidak ada kolom tanggal ditemukan di data komisi")
-        else:
-            start_date = st.selectbox("📅 Pilih Tanggal Awal", tanggal_cols_sorted)
-            end_date = st.selectbox("📅 Pilih Tanggal Akhir", tanggal_cols_sorted, index=len(tanggal_cols_sorted)-1)
-
-            if tanggal_cols_sorted.index(start_date) <= tanggal_cols_sorted.index(end_date):
-                selected_cols = tanggal_cols_sorted[
-                    tanggal_cols_sorted.index(start_date): tanggal_cols_sorted.index(end_date)+1
-                ]
-
-                # Proses data komisi
-                processed = df_komisi[["studio", "username"]].copy()
-                for col in selected_cols:
-                    temp = df_komisi[col].apply(split_data)
-                    temp.columns = [f"Komisi_{col}", f"Omset_{col}", f"Status_{col}"]
-                    processed = pd.concat([processed, temp], axis=1)
-
-                # Total komisi
-                komisi_cols = [col for col in processed.columns if col.startswith("Komisi_")]
-                processed["Est. Komisi"] = processed[komisi_cols].sum(axis=1)
-
-                # Join dengan biaya iklan
-                df_final = processed.merge(
-                    df_iklan[["studio","username","biaya iklan"]],
-                    on=["studio","username"], how="left"
-                )
-
-                # Hitung ROI
-                df_final["ROI"] = (df_final["Est. Komisi"] / df_final["biaya iklan"]) * 100
-                df_final["ROI"] = df_final["ROI"].fillna(0)
-
-                # Styling tabel
-                styled = df_final[["studio","username","biaya iklan","Est. Komisi","ROI"]] \
-                            .style.applymap(color_roi, subset=["ROI"]) \
-                            .format({
-                                "biaya iklan": "Rp {:,.0f}",
-                                "Est. Komisi": "Rp {:,.0f}",
-                                "ROI": "{:.2f}%"
-                            })
-
-                st.write("### 📊 Hasil Analisis ROI")
-                st.dataframe(styled, use_container_width=True)
-
-                # Download tombol
-                csv = df_final.to_csv(index=False).encode("utf-8")
-                st.download_button("⬇️ Download CSV", csv, "hasil_roi.csv", "text/csv")
-
+        logging.info(f"Loaded {file_type} data with columns: {df.columns.tolist()}")
+        return df
     except Exception as e:
-        st.error(f"❌ Error saat parsing data: {e}")
-        logging.exception("🚨 Error detail")
+        logging.error(f"Error loading {file_type} data: {e}")
+        st.error(f"❌ Terjadi error saat parsing data {file_type}: {e}")
+        return None
+
+def highlight_roi(val):
+    try:
+        color = "white"
+        if pd.notnull(val):
+            if val >= 200:
+                # semakin hijau jika ROI tinggi
+                intensity = min(255, int(255 - (val - 200) * 0.5))
+                color = f"background-color: rgb({intensity}, 255, {intensity})"
+            else:
+                # semakin merah jika ROI rendah
+                intensity = min(255, int(255 - (200 - val) * 0.5))
+                color = f"background-color: rgb(255, {intensity}, {intensity})"
+        return color
+    except Exception as e:
+        logging.error(f"Error highlighting ROI: {e}")
+        return "white"
+
+# Upload file
+komisi_file = st.file_uploader("📥 Upload Data Komisi Harian", type=["csv", "xlsx"])
+biaya_file = st.file_uploader("📥 Upload Data Biaya Iklan", type=["csv", "xlsx"])
+
+if komisi_file and biaya_file:
+    komisi = load_data(komisi_file, "komisi")
+    biaya = load_data(biaya_file, "biaya")
+
+    if komisi is not None and biaya is not None:
+        try:
+            # Pastikan kolom join ada
+            if not {"Studio", "Username"}.issubset(komisi.columns):
+                st.error("❌ Data Komisi tidak memiliki kolom 'Studio' dan 'Username'")
+                st.stop()
+            if not {"Studio", "Username"}.issubset(biaya.columns):
+                st.error("❌ Data Biaya tidak memiliki kolom 'Studio' dan 'Username'")
+                st.stop()
+
+            # Pilih kolom komisi harian yang berupa tanggal
+            tanggal_cols = [col for col in komisi.columns if "-" in col]
+
+            # Pilih rentang tanggal
+            st.subheader("📅 Pilih Rentang Tanggal")
+            start_date = st.selectbox("Tanggal Mulai", options=tanggal_cols, index=0)
+            end_date = st.selectbox("Tanggal Akhir", options=tanggal_cols, index=len(tanggal_cols)-1)
+
+            start_idx = tanggal_cols.index(start_date)
+            end_idx = tanggal_cols.index(end_date)
+            selected_dates = tanggal_cols[start_idx:end_idx+1]
+
+            # Ambil data komisi (angka sebelum " - ")
+            komisi_long = komisi.melt(id_vars=["Studio", "Username"], value_vars=selected_dates,
+                                      var_name="Tanggal", value_name="Komisi")
+            komisi_long["Komisi"] = komisi_long["Komisi"].astype(str).str.extract(r"(\d+(?:\.\d+)*)")[0]
+            komisi_long["Komisi"] = pd.to_numeric(komisi_long["Komisi"].str.replace(".", "", regex=False), errors="coerce").fillna(0)
+
+            komisi_sum = komisi_long.groupby(["Studio", "Username"], as_index=False)["Komisi"].sum()
+            komisi_sum = komisi_sum.rename(columns={"Komisi": "Est. Komisi"})
+
+            # Ambil biaya iklan (angka sebelum " | ")
+            biaya_long = biaya.melt(id_vars=["Studio", "Username"], value_vars=selected_dates,
+                                    var_name="Tanggal", value_name="Biaya")
+            biaya_long["Biaya"] = biaya_long["Biaya"].astype(str).str.split("|").str[0]
+            biaya_long["Biaya"] = pd.to_numeric(biaya_long["Biaya"].str.replace(".", "", regex=False), errors="coerce").fillna(0)
+
+            biaya_sum = biaya_long.groupby(["Studio", "Username"], as_index=False)["Biaya"].sum()
+            biaya_sum = biaya_sum.rename(columns={"Biaya": "Biaya Iklan"})
+
+            # Merge kedua data
+            merged = pd.merge(komisi_sum, biaya_sum, on=["Studio", "Username"], how="inner")
+
+            # Hitung ROI
+            merged["ROI (%)"] = np.where(
+                merged["Biaya Iklan"] > 0,
+                (merged["Est. Komisi"] / merged["Biaya Iklan"]) * 100,
+                np.nan
+            )
+
+            # Tampilkan tabel dengan highlight ROI
+            st.subheader("📊 Hasil Analisis")
+            st.dataframe(merged.style.applymap(highlight_roi, subset=["ROI (%)"]))
+
+            # Download hasil
+            csv = merged.to_csv(index=False).encode("utf-8")
+            st.download_button("💾 Download Hasil CSV", csv, "hasil_analisis.csv", "text/csv")
+
+        except Exception as e:
+            logging.error(f"Processing error: {e}")
+            st.error(f"❌ Terjadi error saat memproses data: {e}")
