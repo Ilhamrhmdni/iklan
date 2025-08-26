@@ -147,30 +147,41 @@ if lines:
 
             # --- Tampilan Halaman ---
             if menu == "📊 Ringkasan Performa":
-                st.subheader("📋 Ringkasan Performa Akun")
+                # --- PERUBAHAN DIMULAI DI SINI ---
+                st.subheader("📋 Ringkasan Performa Studio") # Judul diubah
                 if not filtered_df.empty:
+                    # Kalkulasi Metrik
                     total_penjualan = filtered_df["Penjualan"].sum()
                     total_biaya = filtered_df["Biaya_Iklan"].sum()
-                    total_profit = filtered_df["Profit"].sum()
-
-                    # === Tambahan Data Baru ===
+                    profit_kotor = filtered_df["Komisi 5%"].sum() # Profit sebelum biaya iklan
+                    profit_bersih = filtered_df["Profit"].sum() # Profit setelah biaya iklan
                     total_rugi = filtered_df.loc[filtered_df["Profit"] < 0, "Profit"].sum()
                     jumlah_profit = (filtered_df["Profit"] > 0).sum()
                     jumlah_rugi = (filtered_df["Profit"] < 0).sum()
                     rata_roas = filtered_df["ROAS"].mean()
 
-                    col1, col2, col3, col4 = st.columns(4)
+                    # Tampilan Metrik Baris 1
+                    col1, col2, col3 = st.columns(3)
                     col1.metric("Total Penjualan", format_rupiah(total_penjualan))
                     col2.metric("Total Biaya Iklan", format_rupiah(total_biaya))
-                    col3.metric("Estimasi Total Profit", format_rupiah(total_profit), delta_color=("inverse" if total_profit < 0 else "normal"))
-                    col4.metric("Total Kerugian", format_rupiah(total_rugi), delta_color="inverse")
-
+                    # Metrik baru ditambahkan di sini
+                    col3.metric("Profit Kotor (Komisi 5%)", format_rupiah(profit_kotor))
+                    
                     st.markdown("---")
 
-                    col5, col6, col7 = st.columns(3)
-                    col5.metric("Jumlah Akun Profit", jumlah_profit)
-                    col6.metric("Jumlah Akun Rugi", jumlah_rugi)
-                    col7.metric("Rata-rata ROAS", f"{rata_roas:.2f}x")
+                    # Tampilan Metrik Baris 2
+                    col4, col5 = st.columns(2)
+                    col4.metric("Profit Bersih (Setelah Biaya Iklan)", format_rupiah(profit_bersih), 
+                                delta_color=("inverse" if profit_bersih < 0 else "normal"))
+                    col5.metric("Total Kerugian (dari Akun Rugi)", format_rupiah(total_rugi), delta_color="inverse")
+                    
+                    st.markdown("---")
+                    
+                    # Tampilan Metrik Baris 3
+                    col6, col7, col8 = st.columns(3)
+                    col6.metric("Jumlah Akun Profit", f"{jumlah_profit} Akun")
+                    col7.metric("Jumlah Akun Rugi", f"{jumlah_rugi} Akun")
+                    col8.metric("Rata-rata ROAS", f"{rata_roas:.2f}x")
 
                     st.markdown("---")
 
@@ -179,6 +190,7 @@ if lines:
                         style_summary_table(filtered_df).background_gradient(cmap="RdYlGn", subset=["ROAS"], vmin=0, vmax=60),
                         use_container_width=True
                     )
+                # --- PERUBAHAN SELESAI DI SINI ---
 
             elif menu == "💰 Analisis Komisi & Profit":
                 st.subheader("💰 Estimasi Komisi 5% & Profit")
