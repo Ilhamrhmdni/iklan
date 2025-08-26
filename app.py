@@ -16,6 +16,10 @@ def process_commission_data(raw_text: str) -> pd.DataFrame:
         # Membaca data dengan asumsi pemisah adalah TAB (\t) dan baris pertama adalah header
         df = pd.read_csv(data_io, sep='\t', header=0, lineterminator='\n')
 
+        # Pastikan kolom Username diperlakukan sebagai teks untuk join yang konsisten
+        if 'Username' in df.columns:
+            df['Username'] = df['Username'].astype(str)
+
         # Identifikasi kolom utama dan kolom tanggal
         main_cols = ['Nama Studio', 'Username', 'Saldo', 'Total Penjualan', 'Total Biaya Iklan']
         date_cols = [col for col in df.columns if col not in main_cols]
@@ -52,6 +56,8 @@ def process_ad_cost_data(raw_text: str) -> pd.DataFrame:
         # Asumsi data hanya 2 kolom: Username dan Biaya Iklan, tanpa header
         df = pd.read_csv(data_io, sep='\t', header=None, lineterminator='\n')
         df.columns = ['Username', 'Biaya Iklan Lookup']
+        # Pastikan kolom Username diperlakukan sebagai teks untuk join yang konsisten
+        df['Username'] = df['Username'].astype(str)
         df['Biaya Iklan Lookup'] = pd.to_numeric(df['Biaya Iklan Lookup'].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
         return df
     except Exception as e:
@@ -134,6 +140,11 @@ if st.button("🚀 Proses & Hitung ROI", type="primary", use_container_width=Tru
                     
                     # Ganti nama kolom agar sesuai
                     df_final.rename(columns={'Biaya Iklan Lookup': 'Biaya Iklan'}, inplace=True)
+
+                    # --- PERBAIKAN ERROR ---
+                    # Secara eksplisit pastikan kedua kolom adalah numerik sebelum dibagi
+                    df_final['Est. Komisi'] = pd.to_numeric(df_final['Est. Komisi'], errors='coerce').fillna(0)
+                    df_final['Biaya Iklan'] = pd.to_numeric(df_final['Biaya Iklan'], errors='coerce').fillna(0)
 
                     # Hitung ROI, hindari pembagian dengan nol
                     df_final['ROI'] = (df_final['Est. Komisi'] / df_final['Biaya Iklan']).where(df_final['Biaya Iklan'] != 0, 0)
