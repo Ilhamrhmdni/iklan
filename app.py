@@ -1,172 +1,185 @@
 import streamlit as st
 import pandas as pd
-from io import StringIO
+import numpy as np
+from io import StringIO, BytesIO
 from datetime import datetime
+import logging
 
-# --- Konfigurasi Halaman ---
-st.set_page_config(layout="wide", page_title="Analisis ROI Iklan")
+# --- Konfigurasi Logging ---
+# Setup logging untuk menampilkan info di terminal saat debugging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Fungsi-Fungsi Pengolahan Data ---
+# --- Konfigurasi Halaman Streamlit ---
+st.set_page_config(layout="wide", page_title="Advanced ROI Analyzer")
 
-def process_commission_data(raw_text: str) -> pd.DataFrame:
-    """Mengolah data mentah komisi harian menjadi DataFrame yang terstruktur."""
-    try:
-        # Menggunakan StringIO untuk membaca string seolah-olah file
-        data_io = StringIO(raw_text.strip())
-        # Membaca data dengan asumsi pemisah adalah TAB (\t) dan baris pertama adalah header
-        df = pd.read_csv(data_io, sep='\t', header=0, lineterminator='\n')
+# --- Fungsi-Fungsi Inti ---
 
-        # Pastikan kolom Username diperlakukan sebagai teks untuk join yang konsisten
-        if 'Username' in df.columns:
-            df['Username'] = df['Username'].astype(str)
+def load_data(uploaded_file, pasted_text):
+    """Memuat data dari file yang diunggah atau teks yang ditempel."""
+    if uploaded_file is not None:
+        try:
+            # Menggunakan BytesIO untuk membaca file di memori
+            file_buffer = BytesIO(uploaded_file.getvalue())
+            if uploaded_file.name.endswith('.csv'):
+                return pd.read_csv(file_buffer)
+            elif uploaded_file.name.endswith(('.xls', '.xlsx')):
+                return pd.read_excel(file_buffer, engine='openpyxl')
+        except Exception as e:
+            st.error(f"Gagal membaca file {uploaded_file.name}: {e}")
+            return pd.DataFrame()
+    elif pasted_text:
+        try:
+            return pd.read_csv(StringIO(pasted_text.strip()), sep='\t', lineterminator='\n')
+        except Exception as e:
+            st.error(f"Gagal memproses data yang ditempel: {e}")
+            return pd.DataFrame()
+    return pd.DataFrame()
 
-        # Identifikasi kolom utama dan kolom tanggal
-        main_cols = ['Nama Studio', 'Username', 'Saldo', 'Total Penjualan', 'Total Biaya Iklan']
-        date_cols = [col for col in df.columns if col not in main_cols]
+def clean_numeric_value(series):
+    """Membersihkan seri Pandas untuk mengubahnya menjadi numerik."""
+    # Hapus semua karakter non-numerik kecuali tanda minus
+    cleaned_series = series.astype(str).str.replace(r'[^\d-]', '', regex=True)
+    # Konversi ke numerik, ubah error menjadi NaN, lalu isi NaN dengan 0
+    return pd.to_numeric(cleaned_series, errors='coerce').fillna(0)
 
-        # Buat DataFrame baru hanya dengan kolom utama
-        df_processed = df[main_cols].copy()
-
-        # Bersihkan kolom numerik utama
-        for col in main_cols[2:]:
-             df_processed[col] = pd.to_numeric(df_processed[col].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
-
-        # Loop melalui setiap kolom tanggal untuk mengekstrak data komisi
-        for col_date in date_cols:
-            # Dapatkan tanggal bersih (YYYY-MM-DD) dari nama kolom
-            clean_date = col_date.split(' ')[0]
-            # Pisahkan data harian (contoh: 'Biaya | Penjualan | ROI | Komisi')
-            split_data = df[col_date].astype(str).str.split(' \| ', expand=True)
-            
-            # Hanya proses jika pemisahan menghasilkan 4 kolom
-            if split_data.shape[1] == 4:
-                komisi_col_name = f"Komisi_{clean_date}"
-                # Ambil hanya kolom ke-4 (indeks 3), yaitu data komisi
-                df_processed[komisi_col_name] = pd.to_numeric(split_data[3].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
-        
-        return df_processed
-    except Exception as e:
-        st.error(f"Error saat memproses data komisi: {e}. Pastikan format data (terutama header) sudah benar dan menggunakan pemisah TAB.")
+def normalize_and_process(df, value_name):
+    """
+    Menormalkan nama kolom, mengubah format dari wide ke long, dan membersihkan data.
+    """
+    if df.empty:
         return pd.DataFrame()
 
-def process_ad_cost_data(raw_text: str) -> pd.DataFrame:
-    """Mengolah data mentah biaya iklan. Meniru logika VLOOKUP."""
-    try:
-        data_io = StringIO(raw_text.strip())
-        # Asumsi data hanya 2 kolom: Username dan Biaya Iklan, tanpa header
-        df = pd.read_csv(data_io, sep='\t', header=None, lineterminator='\n')
-        df.columns = ['Username', 'Biaya Iklan Lookup']
-        # Pastikan kolom Username diperlakukan sebagai teks untuk join yang konsisten
-        df['Username'] = df['Username'].astype(str)
-        df['Biaya Iklan Lookup'] = pd.to_numeric(df['Biaya Iklan Lookup'].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
-        return df
-    except Exception as e:
-        st.error(f"Error saat memproses data biaya iklan: {e}. Pastikan formatnya adalah 'Username [TAB] Biaya Iklan' per baris.")
+    logging.info(f"--- Memproses data untuk: {value_name} ---")
+    logging.info(f"Kolom asli terbaca: {df.columns.tolist()}")
+
+    # 1. Normalisasi Nama Kolom
+    rename_map = {
+        col: 'Studio' for col in df.columns if 'studio' in col.lower()
+    }
+    rename_map.update({
+        col: 'Username' for col in df.columns if 'user' in col.lower()
+    })
+    
+    df.rename(columns=rename_map, inplace=True)
+    logging.info(f"Mapping nama kolom yang diterapkan: {rename_map}")
+    logging.info(f"Kolom setelah normalisasi: {df.columns.tolist()}")
+
+    if 'Studio' not in df.columns or 'Username' not in df.columns:
+        st.error(f"Data '{value_name}' harus memiliki kolom 'Studio' dan 'Username'.")
         return pd.DataFrame()
+
+    # 2. Melt Data (Wide to Long)
+    id_vars = ['Studio', 'Username']
+    date_cols = [col for col in df.columns if col not in id_vars]
+    
+    df_long = pd.melt(df, id_vars=id_vars, value_vars=date_cols, var_name='Tanggal', value_name=value_name)
+    
+    # 3. Cleaning
+    df_long['Tanggal'] = pd.to_datetime(df_long['Tanggal'], errors='coerce')
+    df_long[value_name] = clean_numeric_value(df_long[value_name])
+    
+    # Hapus baris dengan tanggal yang tidak valid
+    df_long.dropna(subset=['Tanggal'], inplace=True)
+    
+    logging.info(f"Tipe data setelah cleaning untuk '{value_name}':\n{df_long.dtypes}")
+    
+    return df_long
+
+def style_roi_column(df):
+    """Menerapkan background gradient pada kolom ROI."""
+    cm_red = st.theme.get_theme().secondary_background_color
+    cm_green = 'mediumseagreen' # Warna hijau yang lebih jelas
+    
+    # Buat style dengan gradient merah-putih-hijau
+    return df.style.background_gradient(
+        cmap='coolwarm', # Peta warna yang cocok untuk divergensi
+        subset=['ROI (%)'],
+        vmin=0, # Minimum untuk skala warna
+        vmax=400  # Maksimum untuk skala warna (ROI 400% akan menjadi hijau paling pekat)
+    ).format({
+        'Est. Komisi': 'Rp {:,.0f}',
+        'Biaya Iklan': 'Rp {:,.0f}',
+        'ROI (%)': '{:,.2f}%'
+    })
+
 
 # --- Tampilan Aplikasi Streamlit ---
 
-st.title("📈 Aplikasi Analisis ROI Iklan Otomatis")
-st.markdown("Aplikasi ini menggabungkan dua sumber data untuk menghitung performa iklan per akun dalam rentang waktu tertentu.")
+st.title("📊 Analisis ROI Iklan Tingkat Lanjut")
 
-# --- Langkah 1: Input Data Komisi Harian ---
-with st.expander("Langkah 1: Masukkan Data Komisi Harian", expanded=True):
-    st.info("Tempelkan data komisi harian dari spreadsheet. Pastikan baris pertama adalah **header** dan pemisah antar kolom adalah **TAB**.", icon="📋")
-    SAMPLE_COMMISSION = """Nama Studio	Username	Saldo	Total Penjualan	Total Biaya Iklan	2025-08-25 00:00	2025-08-24 00:00	2025-08-23 00:00
-STUDIO PUSAT	khusustecno	0	44.425.886	465.000	0 | 336.930 | 0% | 0	60.000 | 250.000 | 4.17% | 54	71.793 | 3.388.560 | 47.20% | 130
-BOS METRO	top_service.workshop	14.224	18.049.447	505.699	40.384 | 1.826.794 | 45.24% | 275	18.891 | 930.070 | 49.23% | 153	4.086 | 84.999 | 20.80% | 70
-BOS METRO	prabotan_rumah_tangga60	0	24.133.613	559.511	87.868 | 4.237.693 | 48.23% | 481	36.849 | 1.631.419 | 44.27% | 441	9.794 | 366.488 | 37.42% | 23
-"""
-    commission_text = st.text_area("Data Komisi Harian:", value=SAMPLE_COMMISSION, height=200, key="commission_input")
-
-# --- Langkah 2: Input Data Biaya Iklan ---
-with st.expander("Langkah 2: Masukkan Data Biaya Iklan (Sumber untuk VLOOKUP)", expanded=True):
-    st.info("Tempelkan data biaya iklan dengan format: `Username [TAB] Biaya Iklan`. **Tanpa header**.", icon="💰")
-    SAMPLE_COST = """khusustecno	465000
-top_service.workshop	505699
-prabotan_rumah_tangga60	559511
-"""
-    cost_text = st.text_area("Data Biaya Iklan:", value=SAMPLE_COST, height=150, key="cost_input")
-
-# --- Langkah 3: Pilih Rentang Tanggal ---
-st.markdown("---")
-st.header("Langkah 3: Pilih Rentang Waktu Analisis")
+# --- Input Data ---
 col1, col2 = st.columns(2)
 
-# Menggunakan tanggal dari contoh data sebagai default
-try:
-    start_date = col1.date_input("🗓️ Tanggal Mulai", value=datetime(2025, 8, 23).date())
-    end_date = col2.date_input("🗓️ Tanggal Akhir", value=datetime(2025, 8, 25).date())
-except Exception: # Fallback jika terjadi error
-    start_date = col1.date_input("🗓️ Tanggal Mulai")
-    end_date = col2.date_input("🗓️ Tanggal Akhir")
+with col1:
+    st.header("1. Data Komisi Harian")
+    comm_upload_tab, comm_paste_tab = st.tabs(["📁 Upload File", "📋 Paste Data"])
+    with comm_upload_tab:
+        commission_file = st.file_uploader("Upload file Komisi (CSV/Excel)", type=['csv', 'xlsx', 'xls'], key="comm_file")
+    with comm_paste_tab:
+        commission_text = st.text_area("Atau tempelkan data komisi di sini (dipisahkan TAB)", height=150, key="comm_paste")
 
-# --- Tombol Proses dan Output ---
-st.markdown("---")
+with col2:
+    st.header("2. Data Biaya Iklan")
+    cost_upload_tab, cost_paste_tab = st.tabs(["📁 Upload File", "📋 Paste Data"])
+    with cost_upload_tab:
+        cost_file = st.file_uploader("Upload file Biaya Iklan (CSV/Excel)", type=['csv', 'xlsx', 'xls'], key="cost_file")
+    with cost_paste_tab:
+        cost_text = st.text_area("Atau tempelkan data biaya iklan di sini (dipisahkan TAB)", height=150, key="cost_paste")
+
+# --- Pemilihan Tanggal ---
+st.header("3. Pilih Rentang Tanggal")
+d_col1, d_col2 = st.columns(2)
+start_date = d_col1.date_input("🗓️ Tanggal Mulai", datetime(2025, 8, 1).date())
+end_date = d_col2.date_input("🗓️ Tanggal Akhir", datetime(2025, 8, 27).date())
+
+# --- Proses & Output ---
 if st.button("🚀 Proses & Hitung ROI", type="primary", use_container_width=True):
-    if not commission_text or not cost_text:
-        st.warning("Harap pastikan kedua data (Komisi dan Biaya Iklan) sudah dimasukkan.")
+    # Load data dari sumber yang dipilih
+    df_comm_raw = load_data(commission_file, commission_text)
+    df_cost_raw = load_data(cost_file, cost_text)
+
+    if df_comm_raw.empty or df_cost_raw.empty:
+        st.warning("Pastikan kedua sumber data (Komisi dan Biaya Iklan) sudah diisi.")
     else:
-        with st.spinner("Menggabungkan dan menghitung data..."):
-            df_commission = process_commission_data(commission_text)
-            df_cost = process_ad_cost_data(cost_text)
+        with st.spinner("Menormalkan, membersihkan, dan menghitung data..."):
+            # Proses kedua dataset
+            df_comm_long = normalize_and_process(df_comm_raw, 'Est. Komisi')
+            df_cost_long = normalize_and_process(df_cost_raw, 'Biaya Iklan')
 
-            if not df_commission.empty and not df_cost.empty:
-                # Filter kolom komisi berdasarkan rentang tanggal yang dipilih user
-                komisi_cols = [col for col in df_commission.columns if col.startswith('Komisi_')]
-                selected_komisi_cols = []
-                for col in komisi_cols:
-                    try:
-                        col_date_str = col.replace('Komisi_', '')
-                        col_date = datetime.strptime(col_date_str, '%Y-%m-%d').date()
-                        if start_date <= col_date <= end_date:
-                            selected_komisi_cols.append(col)
-                    except ValueError:
-                        continue # Abaikan jika nama kolom tidak bisa diubah jadi tanggal
-                
-                if not selected_komisi_cols:
-                    st.error("Tidak ada data komisi yang ditemukan pada rentang tanggal yang dipilih. Periksa kembali tanggal Anda atau data yang dimasukkan.")
-                else:
-                    # Hitung "Est. Komisi" dengan menjumlahkan kolom komisi yang terpilih
-                    df_commission['Est. Komisi'] = df_commission[selected_komisi_cols].sum(axis=1)
-                    
-                    # Gabungkan data (simulasi VLOOKUP) berdasarkan 'Username'
-                    df_final = pd.merge(
-                        df_commission[['Nama Studio', 'Username', 'Est. Komisi']],
-                        df_cost,
-                        on='Username',
-                        how='left' # Left join untuk menjaga semua user dari data komisi
-                    ).fillna({'Biaya Iklan Lookup': 0})
-                    
-                    # Ganti nama kolom agar sesuai
-                    df_final.rename(columns={'Biaya Iklan Lookup': 'Biaya Iklan'}, inplace=True)
-
-                    # --- PERBAIKAN ERROR ---
-                    # Secara eksplisit pastikan kedua kolom adalah numerik sebelum dibagi
-                    df_final['Est. Komisi'] = pd.to_numeric(df_final['Est. Komisi'], errors='coerce').fillna(0)
-                    df_final['Biaya Iklan'] = pd.to_numeric(df_final['Biaya Iklan'], errors='coerce').fillna(0)
-
-                    # Hitung ROI, hindari pembagian dengan nol
-                    df_final['ROI'] = (df_final['Est. Komisi'] / df_final['Biaya Iklan']).where(df_final['Biaya Iklan'] != 0, 0)
-                    
-                    st.success("🎉 Perhitungan Selesai!")
-                    st.subheader("Hasil Analisis ROI")
-
-                    # Tampilkan tabel hasil dengan format yang rapi
-                    formatters = {
-                        'Est. Komisi': '{:,.0f}',
-                        'Biaya Iklan': '{:,.0f}',
-                        'ROI': '{:.2%}'
-                    }
-                    st.dataframe(df_final.style.format(formatters), use_container_width=True)
-
-                    # Siapkan tombol download
-                    csv_data = df_final.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Download Hasil sebagai CSV",
-                        data=csv_data,
-                        file_name=f"analisis_roi_{start_date}_to_{end_date}.csv",
-                        mime="text/csv",
-                    )
+            if df_comm_long.empty or df_cost_long.empty:
+                st.error("Gagal memproses salah satu dataset. Periksa log di terminal untuk detail.")
             else:
-                 st.error("Gagal memproses salah satu data. Mohon periksa kembali input Anda.")
+                # Gabungkan kedua dataset
+                df_merged = pd.merge(df_comm_long, df_cost_long, on=['Studio', 'Username', 'Tanggal'], how='outer').fillna(0)
+
+                # Filter berdasarkan rentang tanggal
+                mask = (df_merged['Tanggal'].dt.date >= start_date) & (df_merged['Tanggal'].dt.date <= end_date)
+                df_filtered = df_merged[mask]
+
+                # Group by dan agregasi
+                result = df_filtered.groupby(['Studio', 'Username']).agg({
+                    'Est. Komisi': 'sum',
+                    'Biaya Iklan': 'sum'
+                }).reset_index()
+
+                # Hitung ROI
+                result['ROI (%)'] = np.where(result['Biaya Iklan'] > 0, (result['Est. Komisi'] / result['Biaya Iklan']) * 100, 0)
+                
+                logging.info(f"Contoh data final sebelum ditampilkan:\n{result.head().to_string()}")
+
+                st.success("🎉 Analisis Selesai!")
+                st.subheader("Tabel Hasil Analisis ROI")
+                
+                # Tampilkan hasil dengan styling
+                st.dataframe(style_roi_column(result), use_container_width=True)
+
+                # Fitur Download
+                csv_buffer = StringIO()
+                result.to_csv(csv_buffer, index=False, encoding='utf-8')
+                st.download_button(
+                    label="📥 Download Hasil sebagai CSV",
+                    data=csv_buffer.getvalue(),
+                    file_name=f"hasil_roi_{start_date}_sd_{end_date}.csv",
+                    mime="text/csv",
+                )
+
