@@ -13,57 +13,72 @@ st.title("📊 Analisis Komisi Harian vs Biaya Iklan")
 # ---------- Helpers ----------
 
 def num_clean(series):
-    """Membersihkan series pandas yang berisi string angka menjadi numeric."""
+    """
+    Membersihkan sebuah Series pandas yang berisi string angka menjadi tipe data numerik.
+    Fungsi ini dirancang untuk menangani format ribuan (titik) dan desimal (koma).
+    """
     if pd.api.types.is_numeric_dtype(series):
         return series
-    # Ganti semua yang bukan digit, koma, titik, atau minus dengan string kosong
+    
+    # Konversi ke string dan hapus semua karakter non-numerik kecuali koma, titik, dan minus
     s = series.astype(str).str.replace(r"[^\d,\.\-]", "", regex=True)
-    # Hapus titik ribuan, lalu ganti koma desimal dengan titik (standar float)
+    
+    # Hapus titik (pemisah ribuan), lalu ganti koma (pemisah desimal) dengan titik
     s = s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+    
+    # Konversi ke numerik, data yang gagal akan menjadi NaN, lalu isi NaN dengan 0
     return pd.to_numeric(s, errors="coerce").fillna(0.0)
 
 def detect_date_columns(df):
-    """Mendeteksi kolom tanggal dari NAMA kolom dan mengonversinya ke objek date."""
+    """
+    Mendeteksi kolom yang namanya adalah tanggal dan mengonversinya ke objek date.
+    Secara otomatis mencoba format yyyy-mm-dd dan dd-mm-yyyy.
+    """
     col2date = {}
     for col in df.columns:
-        # Coba parsing dengan format yyyy-mm-dd (lebih umum) lalu dd-mm-yyyy
+        token = str(col).strip().split()[0]
         try:
-            date_val = pd.to_datetime(str(col).split()[0], dayfirst=False).date()
+            # Coba format standar (yyyy-mm-dd) terlebih dahulu
+            date_val = pd.to_datetime(token, dayfirst=False).date()
             col2date[col] = date_val
         except (ValueError, TypeError):
             try:
-                date_val = pd.to_datetime(str(col).split()[0], dayfirst=True).date()
+                # Jika gagal, coba format dengan hari di depan (dd-mm-yyyy)
+                date_val = pd.to_datetime(token, dayfirst=True).date()
                 col2date[col] = date_val
             except (ValueError, TypeError):
+                # Abaikan jika bukan format tanggal
                 continue
     return col2date
 
 def style_roi(val):
-    """Memberi warna pada sel ROI berdasarkan nilainya."""
+    """Memberi warna latar pada sel ROI berdasarkan nilainya untuk visualisasi."""
     if pd.isna(val) or not isinstance(val, (int, float)):
         return ""
+    
     if val >= 200:
-        # Semakin tinggi, semakin hijau
+        # Semakin tinggi ROI, semakin pekat hijaunya
         g = max(50, int(255 - (val - 200) * 0.5))
         return f"background-color: rgb(0,{g},0); color: white;"
     else:
-        # Semakin rendah, semakin merah
+        # Di bawah 200%, warna bergradasi dari kuning ke merah
         r_val = 255
-        gb_val = max(0, int(255 * (val / 200)))
+        gb_val = max(0, int(255 * (val / 200))) # 0 -> 0 (merah), 200 -> 255 (kuning)
         return f"background-color: rgb({r_val},{gb_val},{gb_val}); color: white;"
 
 def standardize_key_columns(df, file_type):
     """Menemukan dan mengganti nama kolom kunci ('Studio', 'Username') menjadi nama standar."""
     df_renamed = df.copy()
+    # Buat pemetaan nama kolom versi lowercase tanpa spasi ke nama asli
     col_map = {c.lower().strip().replace(" ", ""): c for c in df_renamed.columns}
 
-    # Cari dan ganti nama kolom Studio
+    # Cari dan ganti nama kolom untuk 'Studio'
     studio_key = next((k for k in ["studio", "namastudio"] if k in col_map), None)
     if not studio_key:
         raise ValueError(f"Tidak menemukan kolom 'Studio' atau 'Nama Studio' di data {file_type}.")
     df_renamed.rename(columns={col_map[studio_key]: "Studio"}, inplace=True)
 
-    # Cari dan ganti nama kolom Username
+    # Cari dan ganti nama kolom untuk 'Username'
     user_key = next((k for k in ["username", "user", "akun"] if k in col_map), None)
     if not user_key:
         raise ValueError(f"Tidak menemukan kolom 'Username'/'User'/'Akun' di data {file_type}.")
@@ -78,30 +93,30 @@ biaya_file  = st.file_uploader("Data Biaya Iklan (CSV/Excel)", type=["csv", "xls
 
 if komisi_file and biaya_file:
     try:
-        # Baca file
+        # Baca file dari upload pengguna
         dfk = pd.read_excel(komisi_file) if komisi_file.name.endswith(".xlsx") else pd.read_csv(komisi_file, sep=None, engine="python")
         dfb = pd.read_excel(biaya_file) if biaya_file.name.endswith(".xlsx") else pd.read_csv(biaya_file, sep=None, engine="python")
 
-        # Standarisasi kolom kunci
+        # Standarisasi nama kolom kunci ('Studio', 'Username')
         dfk = standardize_key_columns(dfk, "komisi")
         dfb = standardize_key_columns(dfb, "biaya")
 
-        # Exclude baris TOTAL (lebih robust dengan .str.contains)
+        # Exclude baris yang berisi 'TOTAL' di kolom Username
         dfk = dfk[~dfk["Username"].astype(str).str.contains("TOTAL", case=False, na=False)]
         dfb = dfb[~dfb["Username"].astype(str).str.contains("TOTAL", case=False, na=False)]
 
-        # Deteksi kolom tanggal
+        # Deteksi otomatis semua kolom tanggal di kedua file
         komisi_dates = detect_date_columns(dfk)
         biaya_dates  = detect_date_columns(dfb)
 
-        # Cari tanggal yang sama
+        # Cari tanggal yang sama di kedua dataset
         common_dates = sorted(list(set(komisi_dates.values()) & set(biaya_dates.values())))
 
         if not common_dates:
-            st.error("❌ Tidak ada tanggal yang cocok antara data komisi & biaya.")
+            st.error("❌ Tidak ada tanggal yang cocok antara data komisi & biaya. Pastikan format tanggal di header kolom benar.")
             st.stop()
 
-        # UI Pilihan rentang tanggal
+        # UI untuk memilih rentang tanggal analisis
         st.subheader("📅 Pilih Rentang Tanggal")
         date_labels = [d.isoformat() for d in common_dates]
         start_label = st.selectbox("Tanggal Mulai", options=date_labels, index=0)
@@ -112,36 +127,36 @@ if komisi_file and biaya_file:
             st.error("Tanggal Mulai tidak boleh lebih besar dari Tanggal Akhir.")
             st.stop()
 
-        # Filter kolom berdasarkan rentang tanggal
+        # Filter kolom berdasarkan rentang tanggal yang dipilih pengguna
         k_cols = [col for col, date in komisi_dates.items() if start_d <= date <= end_d]
         b_cols = [col for col, date in biaya_dates.items() if start_d <= date <= end_d]
 
-        # ---------- Proses Data (Lebih Efisien dengan Vectorization) ----------
+        # ---------- Proses Data (Metode Vectorized yang Efisien) ----------
         
-        # 1. Hitung Est. Komisi
+        # 1. Hitung Total Estimasi Komisi
         komisi_sum = dfk[["Studio", "Username"]].copy()
-        # Ekstrak angka pertama sebelum ' - ' menggunakan regex, lalu bersihkan
         komisi_data = dfk[k_cols].astype(str).apply(lambda x: x.str.extract(r"^(\s*[\d\.]+)", expand=False))
         komisi_sum["Est. Komisi"] = num_clean(komisi_data.stack()).groupby(level=0).sum()
         komisi_agg = komisi_sum.groupby(["Studio", "Username"])["Est. Komisi"].sum().reset_index()
 
-        # 2. Hitung Biaya Iklan
+        # 2. Hitung Total Biaya Iklan
         biaya_sum = dfb[["Studio", "Username"]].copy()
-        # Ambil bagian pertama sebelum '|', lalu bersihkan
         biaya_data = dfb[b_cols].astype(str).apply(lambda x: x.str.split("|").str[0])
         biaya_sum["Biaya Iklan"] = num_clean(biaya_data.stack()).groupby(level=0).sum()
         biaya_agg = biaya_sum.groupby(["Studio", "Username"])["Biaya Iklan"].sum().reset_index()
         
-        # ---------- Merge & ROI (Gunakan 'outer' agar tidak ada data hilang) ----------
+        # ---------- Gabungkan Data & Hitung ROI ----------
+        # Menggunakan 'outer' merge untuk memastikan tidak ada data pengguna yang hilang
         merged = pd.merge(komisi_agg, biaya_agg, on=["Studio", "Username"], how="outer").fillna(0)
         
+        # Kalkulasi ROI yang aman dari error pembagian dengan nol
         merged["ROI (%)"] = np.where(
             merged["Biaya Iklan"] > 0,
             (merged["Est. Komisi"] / merged["Biaya Iklan"]) * 100.0,
             0.0
         )
 
-        # ---------- Tampilkan Hasil ----------
+        # ---------- Tampilkan Hasil Akhir ----------
         st.subheader("📊 Hasil Analisis")
         show = merged.sort_values(["Studio", "Username"]).reset_index(drop=True)
         show = show[["Studio", "Username", "Biaya Iklan", "Est. Komisi", "ROI (%)"]]
@@ -154,10 +169,10 @@ if komisi_file and biaya_file:
 
         st.dataframe(styled, use_container_width=True)
 
-        # Download
+        # Tombol untuk mengunduh hasil analisis
         csv = show.to_csv(index=False).encode("utf-8")
-        st.download_button("💾 Download CSV", csv, "hasil_analisis.csv", "text/csv")
+        st.download_button("💾 Download Hasil (CSV)", csv, "hasil_analisis_roi.csv", "text/csv")
 
     except Exception as e:
-        st.error(f"❌ Terjadi error: {e}")
+        st.error(f"❌ Terjadi error saat memproses data: {e}")
         logging.exception("Gagal memproses file")
