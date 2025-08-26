@@ -11,24 +11,34 @@ st.set_page_config(layout="wide", page_title="Analisis ROI Iklan")
 def process_commission_data(raw_text: str) -> pd.DataFrame:
     """Mengolah data mentah komisi harian menjadi DataFrame yang terstruktur."""
     try:
+        # Menggunakan StringIO untuk membaca string seolah-olah file
         data_io = StringIO(raw_text.strip())
+        # Membaca data dengan asumsi pemisah adalah TAB (\t) dan baris pertama adalah header
         df = pd.read_csv(data_io, sep='\t', header=0, lineterminator='\n')
 
+        # Identifikasi kolom utama dan kolom tanggal
         main_cols = ['Nama Studio', 'Username', 'Saldo', 'Total Penjualan', 'Total Biaya Iklan']
         date_cols = [col for col in df.columns if col not in main_cols]
 
+        # Buat DataFrame baru hanya dengan kolom utama
         df_processed = df[main_cols].copy()
 
+        # Bersihkan kolom numerik utama
         for col in main_cols[2:]:
              df_processed[col] = pd.to_numeric(df_processed[col].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
 
+        # Loop melalui setiap kolom tanggal untuk mengekstrak data komisi
         for col_date in date_cols:
+            # Dapatkan tanggal bersih (YYYY-MM-DD) dari nama kolom
             clean_date = col_date.split(' ')[0]
+            # Pisahkan data harian (contoh: 'Biaya | Penjualan | ROI | Komisi')
             split_data = df[col_date].astype(str).str.split(' \| ', expand=True)
+            
+            # Hanya proses jika pemisahan menghasilkan 4 kolom
             if split_data.shape[1] == 4:
                 komisi_col_name = f"Komisi_{clean_date}"
-                split_data.columns = [f"Biaya_{clean_date}", f"Penjualan_{clean_date}", f"ROI_{clean_date}", komisi_col_name]
-                df_processed[komisi_col_name] = pd.to_numeric(split_data[komisi_col_name].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
+                # Ambil hanya kolom ke-4 (indeks 3), yaitu data komisi
+                df_processed[komisi_col_name] = pd.to_numeric(split_data[3].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
         
         return df_processed
     except Exception as e:
@@ -41,8 +51,8 @@ def process_ad_cost_data(raw_text: str) -> pd.DataFrame:
         data_io = StringIO(raw_text.strip())
         # Asumsi data hanya 2 kolom: Username dan Biaya Iklan, tanpa header
         df = pd.read_csv(data_io, sep='\t', header=None, lineterminator='\n')
-        df.columns = ['Username', 'Biaya Iklan']
-        df['Biaya Iklan'] = pd.to_numeric(df['Biaya Iklan'].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
+        df.columns = ['Username', 'Biaya Iklan Lookup']
+        df['Biaya Iklan Lookup'] = pd.to_numeric(df['Biaya Iklan Lookup'].astype(str).str.replace('.', '', regex=False), errors='coerce').fillna(0)
         return df
     except Exception as e:
         st.error(f"Error saat memproses data biaya iklan: {e}. Pastikan formatnya adalah 'Username [TAB] Biaya Iklan' per baris.")
@@ -76,10 +86,12 @@ prabotan_rumah_tangga60	559511
 st.markdown("---")
 st.header("Langkah 3: Pilih Rentang Waktu Analisis")
 col1, col2 = st.columns(2)
+
+# Menggunakan tanggal dari contoh data sebagai default
 try:
-    start_date = col1.date_input("🗓️ Tanggal Mulai", value=datetime(2025, 8, 23))
-    end_date = col2.date_input("🗓️ Tanggal Akhir", value=datetime(2025, 8, 25))
-except Exception: # Fallback for potential date issues
+    start_date = col1.date_input("🗓️ Tanggal Mulai", value=datetime(2025, 8, 23).date())
+    end_date = col2.date_input("🗓️ Tanggal Akhir", value=datetime(2025, 8, 25).date())
+except Exception: # Fallback jika terjadi error
     start_date = col1.date_input("🗓️ Tanggal Mulai")
     end_date = col2.date_input("🗓️ Tanggal Akhir")
 
@@ -94,7 +106,7 @@ if st.button("🚀 Proses & Hitung ROI", type="primary", use_container_width=Tru
             df_cost = process_ad_cost_data(cost_text)
 
             if not df_commission.empty and not df_cost.empty:
-                # Filter kolom komisi berdasarkan rentang tanggal
+                # Filter kolom komisi berdasarkan rentang tanggal yang dipilih user
                 komisi_cols = [col for col in df_commission.columns if col.startswith('Komisi_')]
                 selected_komisi_cols = []
                 for col in komisi_cols:
@@ -109,26 +121,27 @@ if st.button("🚀 Proses & Hitung ROI", type="primary", use_container_width=Tru
                 if not selected_komisi_cols:
                     st.error("Tidak ada data komisi yang ditemukan pada rentang tanggal yang dipilih. Periksa kembali tanggal Anda atau data yang dimasukkan.")
                 else:
-                    # Hitung "Est. Komisi"
+                    # Hitung "Est. Komisi" dengan menjumlahkan kolom komisi yang terpilih
                     df_commission['Est. Komisi'] = df_commission[selected_komisi_cols].sum(axis=1)
                     
-                    # Gabungkan data (simulasi VLOOKUP)
-                    # Kita join berdasarkan 'Username'
+                    # Gabungkan data (simulasi VLOOKUP) berdasarkan 'Username'
                     df_final = pd.merge(
                         df_commission[['Nama Studio', 'Username', 'Est. Komisi']],
                         df_cost,
                         on='Username',
                         how='left' # Left join untuk menjaga semua user dari data komisi
-                    ).fillna({'Biaya Iklan': 0})
+                    ).fillna({'Biaya Iklan Lookup': 0})
+                    
+                    # Ganti nama kolom agar sesuai
+                    df_final.rename(columns={'Biaya Iklan Lookup': 'Biaya Iklan'}, inplace=True)
 
-                    # Hitung ROI
-                    # Tambahkan kondisi untuk menghindari pembagian dengan nol
+                    # Hitung ROI, hindari pembagian dengan nol
                     df_final['ROI'] = (df_final['Est. Komisi'] / df_final['Biaya Iklan']).where(df_final['Biaya Iklan'] != 0, 0)
                     
                     st.success("🎉 Perhitungan Selesai!")
                     st.subheader("Hasil Analisis ROI")
 
-                    # Tampilkan tabel hasil
+                    # Tampilkan tabel hasil dengan format yang rapi
                     formatters = {
                         'Est. Komisi': '{:,.0f}',
                         'Biaya Iklan': '{:,.0f}',
