@@ -2,6 +2,14 @@ import streamlit as st
 import pandas as pd
 import re
 from io import StringIO
+import logging
+
+# --- Setup logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 
 st.set_page_config(page_title="Analisis ROI Shopee", layout="wide")
 st.title("📊 Analisis ROI Shopee")
@@ -16,6 +24,7 @@ def split_data(cell):
         omset = int(match.group(2).replace(".", ""))
         status = match.group(3)
         return pd.Series([komisi, omset, status])
+    logging.warning(f"⚠️ Format tidak sesuai: {cell}")
     return pd.Series([0, 0, None])
 
 # --- Fungsi styling ROI ---
@@ -23,12 +32,10 @@ def color_roi(val):
     if pd.isna(val) or val == 0:
         return "color: black"
     if val >= 200:
-        # hijau makin pekat kalau makin tinggi
-        g = min(255, int(255 - (min(val, 600) - 200) * 0.6))  # range 200%-600%
+        g = min(255, int(255 - (min(val, 600) - 200) * 0.6))  # hijau makin pekat
         return f"background-color: rgb(0,{g},0); color:white;"
     else:
-        # merah makin pekat kalau makin rendah
-        r = min(255, int(255 - max(val, 0) * 0.8))  # range 0%-200%
+        r = min(255, int(255 - max(val, 0) * 0.8))  # merah makin pekat
         return f"background-color: rgb(255,{r},{r}); color:white;"
 
 # --- Input data paste ---
@@ -40,9 +47,13 @@ iklan_text = st.text_area("Paste data biaya iklan di sini (format CSV/TSV dari E
 
 if komisi_text and iklan_text:
     try:
-        # Convert text ke DataFrame
+        logging.info("🔄 Mulai parsing data komisi...")
         df_komisi = pd.read_csv(StringIO(komisi_text), sep="\t")
+        logging.info(f"✅ Data komisi berhasil dibaca: {df_komisi.shape}")
+
+        logging.info("🔄 Mulai parsing data iklan...")
         df_iklan = pd.read_csv(StringIO(iklan_text), sep="\t")
+        logging.info(f"✅ Data iklan berhasil dibaca: {df_iklan.shape}")
 
         # Normalisasi nama kolom
         df_komisi.columns = df_komisi.columns.str.strip().str.lower()
@@ -61,12 +72,14 @@ if komisi_text and iklan_text:
         df_komisi.rename(columns=rename_map, inplace=True)
         df_iklan.rename(columns=rename_map, inplace=True)
 
-        # Ambil kolom tanggal (berisi tanda "-")
+        # Cari kolom tanggal
         tanggal_cols = [col for col in df_komisi.columns if "-" in col]
         tanggal_cols_sorted = sorted(tanggal_cols, key=lambda x: pd.to_datetime(x, dayfirst=True))
+        logging.info(f"📅 Kolom tanggal ditemukan: {tanggal_cols_sorted}")
 
         if not tanggal_cols_sorted:
             st.error("❌ Tidak ditemukan kolom tanggal di data komisi harian!")
+            logging.error("❌ Tidak ada kolom tanggal valid di data komisi!")
         else:
             start_date = st.selectbox("📅 Pilih Tanggal Awal", tanggal_cols_sorted)
             end_date = st.selectbox("📅 Pilih Tanggal Akhir", tanggal_cols_sorted, index=len(tanggal_cols_sorted)-1)
@@ -75,6 +88,7 @@ if komisi_text and iklan_text:
                 selected_cols = tanggal_cols_sorted[
                     tanggal_cols_sorted.index(start_date): tanggal_cols_sorted.index(end_date)+1
                 ]
+                logging.info(f"📊 Rentang tanggal dipilih: {selected_cols}")
 
                 # Proses data komisi
                 processed = df_komisi[['studio', 'username']].copy()
@@ -93,6 +107,7 @@ if komisi_text and iklan_text:
                     on=["studio","username"], 
                     how="left"
                 )
+                logging.info(f"🔗 Join selesai: {df_final.shape}")
 
                 # Hitung ROI
                 df_final["ROI"] = (df_final["Est. Komisi"] / df_final["biaya iklan"]) * 100
@@ -101,7 +116,11 @@ if komisi_text and iklan_text:
                 # Styling tabel
                 styled = df_final[["studio","username","biaya iklan","Est. Komisi","ROI"]] \
                             .style.applymap(color_roi, subset=["ROI"]) \
-                            .format({"biaya iklan": "Rp {:,.0f}", "Est. Komisi": "Rp {:,.0f}", "ROI": "{:.2f}%"})
+                            .format({
+                                "biaya iklan": "Rp {:,.0f}",
+                                "Est. Komisi": "Rp {:,.0f}",
+                                "ROI": "{:.2f}%"
+                            })
 
                 st.write("### 📊 Hasil Analisis ROI (dengan Highlight)")
                 st.dataframe(styled, use_container_width=True)
@@ -112,3 +131,4 @@ if komisi_text and iklan_text:
 
     except Exception as e:
         st.error(f"❌ Terjadi error saat parsing data: {e}")
+        logging.exception("🚨 Error saat proses data")
