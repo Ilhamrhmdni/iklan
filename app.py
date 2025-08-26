@@ -1,146 +1,163 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import re
 import logging
 
-# Setup logging
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+# ===== Logging =====
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-st.set_page_config(page_title="Analisis Komisi & Biaya Iklan", layout="wide")
+st.set_page_config(page_title="Analisis Komisi vs Biaya Iklan", layout="wide")
 st.title("📊 Analisis Komisi Harian vs Biaya Iklan")
 
-# Fungsi untuk mapping nama kolom supaya fleksibel
-def standardize_columns(df, file_type="komisi"):
-    rename_map = {}
+# ---------- Helpers ----------
 
-    if "Nama Studio" in df.columns:
-        rename_map["Nama Studio"] = "Studio"
-    elif "STUDIO" in df.columns:
-        rename_map["STUDIO"] = "Studio"
+def num_clean(series):
+    """Membersihkan series pandas yang berisi string angka menjadi numeric."""
+    if pd.api.types.is_numeric_dtype(series):
+        return series
+    # Ganti semua yang bukan digit, koma, titik, atau minus dengan string kosong
+    s = series.astype(str).str.replace(r"[^\d,\.\-]", "", regex=True)
+    # Hapus titik ribuan, lalu ganti koma desimal dengan titik (standar float)
+    s = s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+    return pd.to_numeric(s, errors="coerce").fillna(0.0)
 
-    if "username" in df.columns:
-        rename_map["username"] = "Username"
-    elif "USER" in df.columns:
-        rename_map["USER"] = "Username"
+def detect_date_columns(df):
+    """Mendeteksi kolom tanggal dari NAMA kolom dan mengonversinya ke objek date."""
+    col2date = {}
+    for col in df.columns:
+        # Coba parsing dengan format yyyy-mm-dd (lebih umum) lalu dd-mm-yyyy
+        try:
+            date_val = pd.to_datetime(str(col).split()[0], dayfirst=False).date()
+            col2date[col] = date_val
+        except (ValueError, TypeError):
+            try:
+                date_val = pd.to_datetime(str(col).split()[0], dayfirst=True).date()
+                col2date[col] = date_val
+            except (ValueError, TypeError):
+                continue
+    return col2date
 
-    if rename_map:
-        df = df.rename(columns=rename_map)
-        logging.info(f"{file_type} -> Rename applied: {rename_map}")
-
-    return df
-
-def load_data(file, file_type="komisi"):
-    try:
-        if file.name.endswith(".xlsx"):
-            df = pd.read_excel(file)
-        else:
-            df = pd.read_csv(file, sep="\t")
-
-        df.columns = df.columns.str.strip()
-        df = standardize_columns(df, file_type=file_type)
-
-        st.write(f"📂 Kolom terbaca dari {file_type}:", df.columns.tolist())
-        return df
-    except Exception as e:
-        logging.error(f"Error loading {file_type} data: {e}")
-        st.error(f"❌ Terjadi error saat parsing data {file_type}: {e}")
-        return None
-
-def highlight_roi(val):
-    if pd.isna(val):
+def style_roi(val):
+    """Memberi warna pada sel ROI berdasarkan nilainya."""
+    if pd.isna(val) or not isinstance(val, (int, float)):
         return ""
     if val >= 200:
-        intensity = min(255, int(255 - (val - 200) * 0.5))
-        return f"background-color: rgb({intensity}, 255, {intensity})"
+        # Semakin tinggi, semakin hijau
+        g = max(50, int(255 - (val - 200) * 0.5))
+        return f"background-color: rgb(0,{g},0); color: white;"
     else:
-        intensity = min(255, int(255 - (200 - val) * 0.5))
-        return f"background-color: rgb(255, {intensity}, {intensity})"
+        # Semakin rendah, semakin merah
+        r_val = 255
+        gb_val = max(0, int(255 * (val / 200)))
+        return f"background-color: rgb({r_val},{gb_val},{gb_val}); color: white;"
 
-# Fungsi cleaning angka (buang Rp, %, titik, koma, dsb)
-def clean_numeric(series):
-    return (
-        series.astype(str)
-        .str.replace(r"[^0-9\.\-]", "", regex=True)
-        .replace("", "0")
-        .astype(float)
-    )
+def standardize_key_columns(df, file_type):
+    """Menemukan dan mengganti nama kolom kunci ('Studio', 'Username') menjadi nama standar."""
+    df_renamed = df.copy()
+    col_map = {c.lower().strip().replace(" ", ""): c for c in df_renamed.columns}
 
-# Upload file
-komisi_file = st.file_uploader("📥 Upload Data Komisi Harian", type=["csv", "xlsx"])
-biaya_file = st.file_uploader("📥 Upload Data Biaya Iklan", type=["csv", "xlsx"])
+    # Cari dan ganti nama kolom Studio
+    studio_key = next((k for k in ["studio", "namastudio"] if k in col_map), None)
+    if not studio_key:
+        raise ValueError(f"Tidak menemukan kolom 'Studio' atau 'Nama Studio' di data {file_type}.")
+    df_renamed.rename(columns={col_map[studio_key]: "Studio"}, inplace=True)
+
+    # Cari dan ganti nama kolom Username
+    user_key = next((k for k in ["username", "user", "akun"] if k in col_map), None)
+    if not user_key:
+        raise ValueError(f"Tidak menemukan kolom 'Username'/'User'/'Akun' di data {file_type}.")
+    df_renamed.rename(columns={col_map[user_key]: "Username"}, inplace=True)
+    
+    return df_renamed
+
+# ---------- UI Upload ----------
+st.subheader("📥 Upload Data")
+komisi_file = st.file_uploader("Data Komisi Harian (CSV/Excel)", type=["csv", "xlsx"])
+biaya_file  = st.file_uploader("Data Biaya Iklan (CSV/Excel)", type=["csv", "xlsx"])
 
 if komisi_file and biaya_file:
-    komisi = load_data(komisi_file, "komisi")
-    biaya = load_data(biaya_file, "biaya")
+    try:
+        # Baca file
+        dfk = pd.read_excel(komisi_file) if komisi_file.name.endswith(".xlsx") else pd.read_csv(komisi_file, sep=None, engine="python")
+        dfb = pd.read_excel(biaya_file) if biaya_file.name.endswith(".xlsx") else pd.read_csv(biaya_file, sep=None, engine="python")
 
-    if komisi is not None and biaya is not None:
-        try:
-            if not {"Studio", "Username"}.issubset(komisi.columns):
-                st.error("❌ Data Komisi tidak memiliki kolom 'Studio' dan 'Username'")
-                st.stop()
-            if not {"Studio", "Username"}.issubset(biaya.columns):
-                st.error("❌ Data Biaya tidak memiliki kolom 'Studio' dan 'Username'")
-                st.stop()
+        # Standarisasi kolom kunci
+        dfk = standardize_key_columns(dfk, "komisi")
+        dfb = standardize_key_columns(dfb, "biaya")
 
-            # Ambil kolom tanggal
-            tanggal_cols = [col for col in komisi.columns if "-" in col]
+        # Exclude baris TOTAL (lebih robust dengan .str.contains)
+        dfk = dfk[~dfk["Username"].astype(str).str.contains("TOTAL", case=False, na=False)]
+        dfb = dfb[~dfb["Username"].astype(str).str.contains("TOTAL", case=False, na=False)]
 
-            st.subheader("📅 Pilih Rentang Tanggal")
-            start_date = st.selectbox("Tanggal Mulai", options=tanggal_cols, index=0)
-            end_date = st.selectbox("Tanggal Akhir", options=tanggal_cols, index=len(tanggal_cols)-1)
+        # Deteksi kolom tanggal
+        komisi_dates = detect_date_columns(dfk)
+        biaya_dates  = detect_date_columns(dfb)
 
-            start_idx = tanggal_cols.index(start_date)
-            end_idx = tanggal_cols.index(end_date)
-            selected_dates = tanggal_cols[start_idx:end_idx+1]
+        # Cari tanggal yang sama
+        common_dates = sorted(list(set(komisi_dates.values()) & set(biaya_dates.values())))
 
-            # --- Komisi ---
-            komisi_long = komisi.melt(
-                id_vars=["Studio", "Username"],
-                value_vars=selected_dates,
-                var_name="Tanggal",
-                value_name="Komisi"
-            )
-            komisi_long["Komisi"] = clean_numeric(komisi_long["Komisi"])
-            komisi_sum = komisi_long.groupby(["Studio", "Username"], as_index=False)["Komisi"].sum()
-            komisi_sum = komisi_sum.rename(columns={"Komisi": "Est. Komisi"})
+        if not common_dates:
+            st.error("❌ Tidak ada tanggal yang cocok antara data komisi & biaya.")
+            st.stop()
 
-            # --- Biaya ---
-            biaya_long = biaya.melt(
-                id_vars=["Studio", "Username"],
-                value_vars=selected_dates,
-                var_name="Tanggal",
-                value_name="Biaya"
-            )
-            biaya_long["Biaya"] = biaya_long["Biaya"].astype(str).str.split("|").str[0]
-            biaya_long["Biaya"] = clean_numeric(biaya_long["Biaya"])
-            biaya_sum = biaya_long.groupby(["Studio", "Username"], as_index=False)["Biaya"].sum()
-            biaya_sum = biaya_sum.rename(columns={"Biaya": "Biaya Iklan"})
+        # UI Pilihan rentang tanggal
+        st.subheader("📅 Pilih Rentang Tanggal")
+        date_labels = [d.isoformat() for d in common_dates]
+        start_label = st.selectbox("Tanggal Mulai", options=date_labels, index=0)
+        end_label   = st.selectbox("Tanggal Akhir", options=date_labels, index=len(date_labels)-1)
 
-            # --- Merge ---
-            merged = pd.merge(komisi_sum, biaya_sum, on=["Studio", "Username"], how="inner")
+        start_d, end_d = pd.to_datetime(start_label).date(), pd.to_datetime(end_label).date()
+        if start_d > end_d:
+            st.error("Tanggal Mulai tidak boleh lebih besar dari Tanggal Akhir.")
+            st.stop()
 
-            # Paksa numeric lagi
-            merged["Est. Komisi"] = clean_numeric(merged["Est. Komisi"])
-            merged["Biaya Iklan"] = clean_numeric(merged["Biaya Iklan"])
+        # Filter kolom berdasarkan rentang tanggal
+        k_cols = [col for col, date in komisi_dates.items() if start_d <= date <= end_d]
+        b_cols = [col for col, date in biaya_dates.items() if start_d <= date <= end_d]
 
-            # Debug
-            logging.info("Sample nilai sebelum ROI:\n%s", merged.head().to_string())
-            logging.info("Tipe data kolom:\n%s", merged.dtypes)
+        # ---------- Proses Data (Lebih Efisien dengan Vectorization) ----------
+        
+        # 1. Hitung Est. Komisi
+        komisi_sum = dfk[["Studio", "Username"]].copy()
+        # Ekstrak angka pertama sebelum ' - ' menggunakan regex, lalu bersihkan
+        komisi_data = dfk[k_cols].astype(str).apply(lambda x: x.str.extract(r"^(\s*[\d\.]+)", expand=False))
+        komisi_sum["Est. Komisi"] = num_clean(komisi_data.stack()).groupby(level=0).sum()
+        komisi_agg = komisi_sum.groupby(["Studio", "Username"])["Est. Komisi"].sum().reset_index()
 
-            # --- ROI ---
-            merged["ROI (%)"] = np.where(
-                merged["Biaya Iklan"] > 0,
-                (merged["Est. Komisi"] / merged["Biaya Iklan"]) * 100.0,
-                0.0
-            )
+        # 2. Hitung Biaya Iklan
+        biaya_sum = dfb[["Studio", "Username"]].copy()
+        # Ambil bagian pertama sebelum '|', lalu bersihkan
+        biaya_data = dfb[b_cols].astype(str).apply(lambda x: x.str.split("|").str[0])
+        biaya_sum["Biaya Iklan"] = num_clean(biaya_data.stack()).groupby(level=0).sum()
+        biaya_agg = biaya_sum.groupby(["Studio", "Username"])["Biaya Iklan"].sum().reset_index()
+        
+        # ---------- Merge & ROI (Gunakan 'outer' agar tidak ada data hilang) ----------
+        merged = pd.merge(komisi_agg, biaya_agg, on=["Studio", "Username"], how="outer").fillna(0)
+        
+        merged["ROI (%)"] = np.where(
+            merged["Biaya Iklan"] > 0,
+            (merged["Est. Komisi"] / merged["Biaya Iklan"]) * 100.0,
+            0.0
+        )
 
-            # --- Output ---
-            st.subheader("📊 Hasil Analisis")
-            st.dataframe(merged.style.applymap(highlight_roi, subset=["ROI (%)"]))
+        # ---------- Tampilkan Hasil ----------
+        st.subheader("📊 Hasil Analisis")
+        show = merged.sort_values(["Studio", "Username"]).reset_index(drop=True)
+        show = show[["Studio", "Username", "Biaya Iklan", "Est. Komisi", "ROI (%)"]]
 
-            csv = merged.to_csv(index=False).encode("utf-8")
-            st.download_button("💾 Download CSV", csv, "hasil_analisis.csv", "text/csv")
+        styled = show.style.format({
+            "Biaya Iklan": "Rp {:,.0f}",
+            "Est. Komisi": "Rp {:,.0f}",
+            "ROI (%)": "{:.2f}%"
+        }).applymap(style_roi, subset=["ROI (%)"])
 
-        except Exception as e:
-            logging.error(f"Processing error: {e}")
-            st.error(f"❌ Terjadi error saat memproses data: {e}")
+        st.dataframe(styled, use_container_width=True)
+
+        # Download
+        csv = show.to_csv(index=False).encode("utf-8")
+        st.download_button("💾 Download CSV", csv, "hasil_analisis.csv", "text/csv")
+
+    except Exception as e:
+        st.error(f"❌ Terjadi error: {e}")
+        logging.exception("Gagal memproses file")
