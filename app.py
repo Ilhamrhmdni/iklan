@@ -159,9 +159,9 @@ if lines:
                     jumlah_rugi = (filtered_df["Profit"] < 0).sum()
                     
                     # --- PERUBAHAN PERHITUNGAN ROAS ---
-                    # Menghitung ROAS Studio berdasarkan (Profit Kotor / Biaya Iklan)
+                    # Menghitung ROAS Studio berdasarkan (Total Penjualan / Biaya Iklan)
                     if total_biaya > 0:
-                        roas_studio = (profit_kotor / total_biaya) * 100
+                        roas_studio = (total_penjualan / total_biaya) * 100
                     else:
                         roas_studio = 0
                     # --- AKHIR PERUBAHAN ---
@@ -186,7 +186,6 @@ if lines:
                     col6, col7, col8 = st.columns(3)
                     col6.metric("Jumlah Akun Profit", f"{jumlah_profit} Akun")
                     col7.metric("Jumlah Akun Rugi", f"{jumlah_rugi} Akun")
-                    # --- PERUBAHAN TAMPILAN METRIK ROAS ---
                     col8.metric("ROAS Studio (%)", f"{roas_studio:.2f}%")
 
                     st.markdown("---")
