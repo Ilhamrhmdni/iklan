@@ -3,12 +3,12 @@ import pandas as pd
 import numpy as np
 
 # --- Konfigurasi Halaman ---
-st.set_page_config(page_title="Analisis ROAS Shopee Live", layout="wide")
-st.title("Analisis Data Iklan Shopee (Advanced)")
+st.set_page_config(page_title="📊 Analisis ROAS Shopee", layout="wide")
+st.title("📈 Analisis Data Iklan Shopee (Advanced)")
 
 st.markdown("""
 **Aplikasi ini dirancang untuk membaca data ringkasan dari Shopee.**
-**Paste Data Laporan Histori Iklan`
+**Format Data yang Diharapkan:** `Nama Studio | Username | Saldo | Total Penjualan | Total Biaya Iklan`
 """)
 
 # === Fungsi Bantuan (Helpers) ===
@@ -68,17 +68,21 @@ def parse_summary_data(raw_lines, commission_rate):
             studio = parts[0].strip()
             username = parts[1].strip()
             penjualan = float(str(parts[3]).replace(".", "").replace(",", "") or 0)
-            biaya_iklan = float(str(parts[4]).replace(".", "").replace(",", "") or 0)
+            
+            # --- PERUBAHAN: Tambahkan PPN 11% ke Biaya Iklan ---
+            biaya_iklan_sebelum_ppn = float(str(parts[4]).replace(".", "").replace(",", "") or 0)
+            biaya_iklan_dengan_ppn = biaya_iklan_sebelum_ppn * 1.11
+            # --- AKHIR PERUBAHAN ---
 
-            roas = penjualan / biaya_iklan if biaya_iklan > 0 else 0
+            roas = penjualan / biaya_iklan_dengan_ppn if biaya_iklan_dengan_ppn > 0 else 0
             komisi = penjualan * (commission_rate / 100)
-            profit = komisi - biaya_iklan
+            profit = komisi - biaya_iklan_dengan_ppn
 
             records.append({
                 "Nama Studio": studio,
                 "Username": username,
                 "Penjualan": penjualan,
-                "Biaya_Iklan": biaya_iklan,
+                "Biaya_Iklan": biaya_iklan_dengan_ppn, # Simpan biaya dengan PPN
                 "ROAS": roas,
                 "Komisi": komisi,
                 "Profit": profit
@@ -178,13 +182,13 @@ if not st.session_state.df_processed.empty:
 
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Total Penjualan", format_rupiah(total_penjualan))
-            col2.metric("Total Biaya Iklan", format_rupiah(total_biaya))
+            # --- PERUBAHAN: Update label metrik ---
+            col2.metric("Total Biaya Iklan (+PPN 11%)", format_rupiah(total_biaya))
             col3.metric(f"Profit Kotor (Komisi {commission_input}%)", format_rupiah(profit_kotor))
             col4.metric("Profit Bersih", format_rupiah(profit_bersih), delta_color=("inverse" if profit_bersih < 0 else "normal"))
 
             st.markdown("---")
             
-            # --- PERUBAHAN VISUALISASI DARI GRAFIK KE TABEL ---
             st.subheader("Akun Performa Terbaik & Terendah")
             col_table1, col_table2 = st.columns(2)
 
@@ -206,13 +210,11 @@ if not st.session_state.df_processed.empty:
                     style_summary_table(top_5_loss[columns_to_show]), 
                     use_container_width=True
                 )
-            # --- AKHIR PERUBAHAN ---
             
             st.markdown("---")
             st.subheader("Data Lengkap")
             st.dataframe(style_summary_table(filtered_df).background_gradient(cmap="RdYlGn", subset=["ROAS"], vmin=0, vmax=60), use_container_width=True)
 
-    # --- LEVEL 2: Halaman Ringkasan per Studio ---
     elif menu == "🏢 Ringkasan per Studio":
         st.subheader("🏢 Ringkasan Performa per Studio")
         if not filtered_df.empty:
