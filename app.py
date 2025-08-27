@@ -183,20 +183,30 @@ if not st.session_state.df_processed.empty:
             col4.metric("Profit Bersih", format_rupiah(profit_bersih), delta_color=("inverse" if profit_bersih < 0 else "normal"))
 
             st.markdown("---")
-            # --- LEVEL 1: Tambahan Grafik Visual ---
-            st.subheader("Visualisasi Performa Akun")
-            col_chart1, col_chart2 = st.columns(2)
+            
+            # --- PERUBAHAN VISUALISASI DARI GRAFIK KE TABEL ---
+            st.subheader("Akun Performa Terbaik & Terendah")
+            col_table1, col_table2 = st.columns(2)
 
             top_5_profit = filtered_df.nlargest(5, 'Profit')
             top_5_loss = filtered_df.nsmallest(5, 'Profit')
             
-            with col_chart1:
-                st.write("Top 5 Akun Profit Tertinggi")
-                st.bar_chart(top_5_profit.set_index('Username')['Profit'])
+            columns_to_show = ['Username', 'Profit', 'Penjualan', 'Biaya_Iklan']
 
-            with col_chart2:
+            with col_table1:
+                st.write("Top 5 Akun Profit Tertinggi")
+                st.dataframe(
+                    style_summary_table(top_5_profit[columns_to_show]), 
+                    use_container_width=True
+                )
+
+            with col_table2:
                 st.write("Top 5 Akun Rugi Terbesar")
-                st.bar_chart(top_5_loss.set_index('Username')['Profit'])
+                st.dataframe(
+                    style_summary_table(top_5_loss[columns_to_show]), 
+                    use_container_width=True
+                )
+            # --- AKHIR PERUBAHAN ---
             
             st.markdown("---")
             st.subheader("Data Lengkap")
