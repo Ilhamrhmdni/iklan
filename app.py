@@ -3,12 +3,12 @@ import pandas as pd
 import numpy as np
 
 # --- Konfigurasi Halaman ---
-st.set_page_config(page_title="📊 Analisis ROAS Shopee", layout="wide")
-st.title("📈 Analisis Data Iklan Shopee (Advanced)")
+st.set_page_config(page_title="Analisis ROAS Shopee Live", layout="wide")
+st.title("Analisis Data Iklan Shopee (Advanced)")
 
 st.markdown("""
 **Aplikasi ini dirancang untuk membaca data ringkasan dari Shopee.**
-**Format Data yang Diharapkan:** `Nama Studio | Username | Saldo | Total Penjualan | Total Biaya Iklan`
+**Paste Data Laporan Histori Iklan`
 """)
 
 # === Fungsi Bantuan (Helpers) ===
