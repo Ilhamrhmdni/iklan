@@ -171,36 +171,15 @@ if analysis_mode != "Pilih Mode...":
 if not st.session_state.df_processed.empty:
     df_processed = st.session_state.df_processed
     
-    # --- PERUBAHAN: Penambahan Filter Akun ---
-    st.sidebar.markdown("---")
-    st.sidebar.header("Filter Data")
-    
-    # Filter Studio
-    all_studios = sorted(df_processed['Nama Studio'].unique())
-    selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
-
-    # Filter Akun (dinamis berdasarkan studio yang dipilih)
-    if selected_studios:
-        available_usernames = sorted(df_processed[df_processed['Nama Studio'].isin(selected_studios)]['Username'].unique())
-        selected_usernames = st.sidebar.multiselect("Filter Akun (Username)", available_usernames, default=available_usernames)
-        
-        filtered_df = df_processed[
-            df_processed['Nama Studio'].isin(selected_studios) &
-            df_processed['Username'].isin(selected_usernames)
-        ]
-    else:
-        filtered_df = pd.DataFrame()
-    # --- AKHIR PERUBAHAN ---
-
     # ===================================================================
     # --- TAMPILAN UNTUK MODE ANALISIS HISTORIS ---
     # ===================================================================
-    if st.session_state.analysis_mode == "Historis" and not filtered_df.empty:
+    if st.session_state.analysis_mode == "Historis":
         st.sidebar.markdown("---")
         menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data per 15 Menit", "📊 Ringkasan Performa"])
 
-        min_date = filtered_df['Timestamp'].min().date()
-        max_date = filtered_df['Timestamp'].max().date()
+        min_date = df_processed['Timestamp'].min().date()
+        max_date = df_processed['Timestamp'].max().date()
         
         date_range = st.sidebar.date_input(
             "Pilih Rentang Tanggal",
@@ -211,45 +190,68 @@ if not st.session_state.df_processed.empty:
         time_filtered_df = pd.DataFrame()
         if len(date_range) == 2:
             start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-            time_filtered_df = filtered_df[(filtered_df['Timestamp'] >= start_date) & (filtered_df['Timestamp'] <= end_date + pd.Timedelta(days=1))]
+            time_filtered_df = df_processed[(df_processed['Timestamp'] >= start_date) & (df_processed['Timestamp'] <= end_date + pd.Timedelta(days=1))]
+
+        # --- PERUBAHAN: Filter dipindahkan ke Halaman Utama ---
+        st.header("Filter Data")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            all_studios = sorted(time_filtered_df['Nama Studio'].unique())
+            selected_studios = st.multiselect("Filter Nama Studio", all_studios, default=all_studios)
+        
+        with col2:
+            if selected_studios:
+                available_usernames = sorted(time_filtered_df[time_filtered_df['Nama Studio'].isin(selected_studios)]['Username'].unique())
+                selected_usernames = st.multiselect("Filter Akun (Username)", available_usernames, default=available_usernames)
+            else:
+                selected_usernames = []
+                st.multiselect("Filter Akun (Username)", [])
+
+        final_df = time_filtered_df[
+            time_filtered_df['Nama Studio'].isin(selected_studios) &
+            time_filtered_df['Username'].isin(selected_usernames)
+        ]
+        st.markdown("---")
+        # --- AKHIR PERUBAHAN ---
 
         if menu == "📈 Analisis Tren Waktu":
             st.subheader("📈 Analisis Tren Performa Berdasarkan Waktu")
-            if not time_filtered_df.empty:
-                agg_option = st.sidebar.selectbox("Agregasi Waktu", ["15 Menit", "Per Jam", "Per Hari"])
+            if not final_df.empty:
+                agg_option = st.selectbox("Agregasi Waktu", ["15 Menit", "Per Jam", "Per Hari"])
                 agg_map = {"15 Menit": "15T", "Per Jam": "H", "Per Hari": "D"}
                 
-                df_agg = time_filtered_df.set_index('Timestamp')[['Penjualan', 'Biaya_Iklan', 'Profit']].resample(agg_map[agg_option]).sum().reset_index()
+                df_agg = final_df.set_index('Timestamp')[['Penjualan', 'Biaya_Iklan', 'Profit']].resample(agg_map[agg_option]).sum().reset_index()
 
                 st.subheader(f"Tren Agregasi {agg_option}")
                 st.line_chart(df_agg.set_index('Timestamp'))
 
                 st.markdown("---")
                 st.subheader("🏆 Analisis Jam Emas (Golden Hours)")
-                hourly_summary = time_filtered_df.copy()
+                hourly_summary = final_df.copy()
                 hourly_summary['Jam'] = hourly_summary['Timestamp'].dt.hour
                 golden_hours_df = hourly_summary.groupby('Jam')[['Penjualan', 'Profit']].sum()
                 st.bar_chart(golden_hours_df)
             else:
-                st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
+                st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
         
         elif menu == "📄 Tabel Data per 15 Menit":
             st.subheader("📄 Tabel Rincian per 15 Menit")
             st.info("Tabel ini menampilkan biaya iklan asli (tanpa PPN).")
-            if not time_filtered_df.empty:
-                active_data = time_filtered_df[(time_filtered_df['Penjualan'] > 0) | (time_filtered_df['Biaya_Iklan'] > 0)]
+            if not final_df.empty:
+                active_data = final_df[(final_df['Penjualan'] > 0) | (final_df['Biaya_Iklan'] > 0)]
                 st.dataframe(style_summary_table(active_data[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View']]), use_container_width=True)
             else:
-                st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
+                st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
 
         elif menu == "📊 Ringkasan Performa":
             st.subheader("📊 Ringkasan Performa Total")
             st.info("Pada ringkasan ini, PPN 11% ditambahkan ke Total Biaya Iklan untuk menghitung Profit Bersih.")
-            if not time_filtered_df.empty:
-                total_penjualan = time_filtered_df['Penjualan'].sum()
-                total_biaya_asli = time_filtered_df['Biaya_Iklan'].sum()
+            if not final_df.empty:
+                total_penjualan = final_df['Penjualan'].sum()
+                total_biaya_asli = final_df['Biaya_Iklan'].sum()
                 total_biaya_ppn = total_biaya_asli * 1.11
-                total_komisi = time_filtered_df['Komisi'].sum()
+                total_komisi = final_df['Komisi'].sum()
                 total_profit_bersih = total_komisi - total_biaya_ppn
                 
                 col1, col2, col3, col4 = st.columns(4)
@@ -259,7 +261,7 @@ if not st.session_state.df_processed.empty:
                 col4.metric("Profit Bersih (Setelah PPN)", format_rupiah(total_profit_bersih), delta_color=("inverse" if total_profit_bersih < 0 else "normal"))
 
                 st.markdown("---")
-                summary = time_filtered_df.groupby(['Nama Studio', 'Username']).agg(
+                summary = final_df.groupby(['Nama Studio', 'Username']).agg(
                     Penjualan=("Penjualan", "sum"),
                     Biaya_Iklan=("Biaya_Iklan", "sum"),
                     Komisi=("Komisi", "sum"),
@@ -272,48 +274,53 @@ if not st.session_state.df_processed.empty:
                 
                 st.dataframe(style_summary_table(summary[['Nama Studio', 'Username', 'Penjualan', 'Biaya_Iklan_PPN', 'Profit', 'ROAS', 'View']].rename(columns={"Biaya_Iklan_PPN": "Biaya_Iklan"})), use_container_width=True)
             else:
-                st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
+                st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
 
     # ===================================================================
     # --- TAMPILAN UNTUK MODE ANALISIS RINGKASAN ---
     # ===================================================================
-    elif st.session_state.analysis_mode == "Ringkasan" and not filtered_df.empty:
-        menu_options = ["📊 Ringkasan Performa", "🏢 Ringkasan per Studio", "📥 Download Data"]
-        menu = st.sidebar.radio("Pilih Halaman", menu_options)
+    elif st.session_state.analysis_mode == "Ringkasan":
+        # Filter untuk mode ringkasan tetap di sidebar untuk konsistensi dengan versi lama
+        all_studios = sorted(df_processed['Nama Studio'].unique())
+        selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
+        filtered_df = df_processed[df_processed['Nama Studio'].isin(selected_studios)] if selected_studios else pd.DataFrame()
 
-        if menu == "📊 Ringkasan Performa":
-            st.subheader("📋 Ringkasan Performa Studio")
-            total_penjualan = filtered_df["Penjualan"].sum()
-            total_biaya = filtered_df["Biaya_Iklan"].sum()
-            profit_kotor = filtered_df["Komisi"].sum()
-            profit_bersih = filtered_df["Profit"].sum()
-            
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Penjualan", format_rupiah(total_penjualan))
-            col2.metric("Total Biaya Iklan (+PPN 11%)", format_rupiah(total_biaya))
-            col3.metric(f"Profit Kotor (Komisi {commission_input}%)", format_rupiah(profit_kotor))
-            col4.metric("Profit Bersih", format_rupiah(profit_bersih), delta_color=("inverse" if profit_bersih < 0 else "normal"))
-            
-            st.markdown("---")
-            st.subheader("Data Lengkap")
-            st.dataframe(style_summary_table(filtered_df), use_container_width=True)
+        if not filtered_df.empty:
+            menu_options = ["📊 Ringkasan Performa", "🏢 Ringkasan per Studio", "📥 Download Data"]
+            menu = st.sidebar.radio("Pilih Halaman", menu_options)
 
-        elif menu == "🏢 Ringkasan per Studio":
-            st.subheader("🏢 Ringkasan Performa per Studio")
-            studio_summary = filtered_df.groupby("Nama Studio").agg(
-                Penjualan=("Penjualan", "sum"), Biaya_Iklan=("Biaya_Iklan", "sum"),
-                Profit=("Profit", "sum"), Jumlah_Akun=("Username", "count")
-            ).reset_index()
-            studio_summary['ROAS'] = (studio_summary['Penjualan'] / studio_summary['Biaya_Iklan']).fillna(0)
-            st.dataframe(style_summary_table(studio_summary), use_container_width=True)
+            if menu == "📊 Ringkasan Performa":
+                st.subheader("📋 Ringkasan Performa Studio")
+                total_penjualan = filtered_df["Penjualan"].sum()
+                total_biaya = filtered_df["Biaya_Iklan"].sum()
+                profit_kotor = filtered_df["Komisi"].sum()
+                profit_bersih = filtered_df["Profit"].sum()
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Penjualan", format_rupiah(total_penjualan))
+                col2.metric("Total Biaya Iklan (+PPN 11%)", format_rupiah(total_biaya))
+                col3.metric(f"Profit Kotor (Komisi {commission_input}%)", format_rupiah(profit_kotor))
+                col4.metric("Profit Bersih", format_rupiah(profit_bersih), delta_color=("inverse" if profit_bersih < 0 else "normal"))
+                
+                st.markdown("---")
+                st.subheader("Data Lengkap")
+                st.dataframe(style_summary_table(filtered_df), use_container_width=True)
 
-        elif menu == "📥 Download Data":
-            st.subheader("📥 Download Data yang Telah Diproses")
-            csv_data = filtered_df.to_csv(index=False).encode('utf-8')
-            st.download_button("⬇️ Download CSV", data=csv_data, file_name="analisis_roas_ringkasan.csv", mime="text/csv")
+            elif menu == "🏢 Ringkasan per Studio":
+                st.subheader("🏢 Ringkasan Performa per Studio")
+                studio_summary = filtered_df.groupby("Nama Studio").agg(
+                    Penjualan=("Penjualan", "sum"), Biaya_Iklan=("Biaya_Iklan", "sum"),
+                    Profit=("Profit", "sum"), Jumlah_Akun=("Username", "count")
+                ).reset_index()
+                studio_summary['ROAS'] = (studio_summary['Penjualan'] / studio_summary['Biaya_Iklan']).fillna(0)
+                st.dataframe(style_summary_table(studio_summary), use_container_width=True)
 
-    elif filtered_df.empty:
-        st.warning("Tidak ada data untuk ditampilkan. Silakan pilih setidaknya satu studio atau akun di sidebar.")
+            elif menu == "📥 Download Data":
+                st.subheader("📥 Download Data yang Telah Diproses")
+                csv_data = filtered_df.to_csv(index=False).encode('utf-8')
+                st.download_button("⬇️ Download CSV", data=csv_data, file_name="analisis_roas_ringkasan.csv", mime="text/csv")
+        else:
+            st.warning("Tidak ada data untuk ditampilkan. Silakan pilih setidaknya satu studio di sidebar.")
 
 else:
     st.info("Selamat datang! Silakan pilih mode analisis dan upload file data Anda melalui sidebar untuk memulai.")
