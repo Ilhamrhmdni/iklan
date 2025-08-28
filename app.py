@@ -43,6 +43,8 @@ def parse_historical_data(raw_data, commission_rate):
     lines = raw_data.strip().split('\n')
     header = lines[0].split('\t')
     
+    detected_interval = None
+    
     try:
         time_cols_start_index = 5
         valid_time_headers_with_indices = []
@@ -53,13 +55,21 @@ def parse_historical_data(raw_data, commission_rate):
 
         timestamp_strings = [h for _, h in valid_time_headers_with_indices]
         if not timestamp_strings:
-            st.error("Tidak ada kolom tanggal yang valid ditemukan di header.")
-            return pd.DataFrame()
+            return pd.DataFrame(), None
             
         timestamps = pd.to_datetime(timestamp_strings)
+
+        # --- PERUBAHAN: Deteksi Interval Otomatis ---
+        if len(timestamps) > 1:
+            delta = (timestamps[1] - timestamps[0]).total_seconds()
+            if delta == 900: detected_interval = "15 Menit"
+            elif delta == 3600: detected_interval = "Per Jam"
+            elif delta == 86400: detected_interval = "Per Hari"
+        # --- AKHIR PERUBAHAN ---
+
     except Exception as e:
         st.error(f"Gagal mem-parsing header tanggal. Pastikan formatnya benar. Error: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
     records = []
     for line in lines[1:]:
@@ -80,13 +90,10 @@ def parse_historical_data(raw_data, commission_rate):
                 cell_parts = data_cell.split('|')
                 if len(cell_parts) < 4: continue
 
-                # Biaya iklan sekarang adalah nilai asli tanpa PPN
                 biaya_iklan = float(cell_parts[0].replace(".", "") or 0)
                 penjualan = float(cell_parts[1].replace(".", "") or 0)
                 view = int(cell_parts[3].replace(".", "") or 0)
-                
                 komisi = penjualan * (commission_rate / 100)
-                # Profit di sini juga dihitung dari biaya asli
                 profit = komisi - biaya_iklan
                 roas = penjualan / biaya_iklan if biaya_iklan > 0 else 0
 
@@ -95,15 +102,15 @@ def parse_historical_data(raw_data, commission_rate):
                     "Biaya_Iklan": biaya_iklan, "Penjualan": penjualan, "View": view,
                     "Komisi": komisi, "Profit": profit, "ROAS": roas
                 })
-
             except (ValueError, IndexError):
                 continue
 
-    return pd.DataFrame(records)
+    return pd.DataFrame(records), detected_interval
 
 # --- Parser untuk Data Ringkasan (Format Lama) ---
 @st.cache_data
 def parse_summary_data(raw_data, commission_rate):
+    # ... (kode parser ini tidak berubah) ...
     lines = raw_data.strip().split('\n')
     records = []
     for line in lines:
@@ -129,12 +136,13 @@ def parse_summary_data(raw_data, commission_rate):
             continue
     return pd.DataFrame(records)
 
-
 # === Inisialisasi Session State ===
 if 'df_processed' not in st.session_state:
     st.session_state.df_processed = pd.DataFrame()
 if 'analysis_mode' not in st.session_state:
     st.session_state.analysis_mode = None
+if 'detected_interval' not in st.session_state:
+    st.session_state.detected_interval = None
 
 # === Sidebar & Input ===
 st.sidebar.title("⚙️ Pengaturan & Filter")
@@ -155,15 +163,19 @@ if analysis_mode != "Pilih Mode...":
         raw_data = uploaded_file.read().decode("utf-8")
         
         if analysis_mode == "Analisis Historis (Per Waktu)":
-            df = parse_historical_data(raw_data, commission_input)
+            df, detected_interval = parse_historical_data(raw_data, commission_input)
             st.session_state.analysis_mode = "Historis"
+            st.session_state.detected_interval = detected_interval
         else: # Analisis Ringkasan
             df = parse_summary_data(raw_data, commission_input)
             st.session_state.analysis_mode = "Ringkasan"
+            st.session_state.detected_interval = None
         
         if not df.empty:
             st.session_state.df_processed = df
-            st.sidebar.success(f"✅ Data berhasil diparsing! {len(df) if st.session_state.analysis_mode == 'Historis' else df['Username'].nunique()} item data ditemukan.")
+            st.sidebar.success(f"✅ Data berhasil diparsing!")
+            if st.session_state.detected_interval:
+                st.sidebar.info(f"Interval data terdeteksi: **{st.session_state.detected_interval}**")
         else:
             st.sidebar.error("Gagal memproses data. Periksa format file.")
 
@@ -171,61 +183,47 @@ if analysis_mode != "Pilih Mode...":
 if not st.session_state.df_processed.empty:
     df_processed = st.session_state.df_processed
     
-    # ===================================================================
-    # --- TAMPILAN UNTUK MODE ANALISIS HISTORIS ---
-    # ===================================================================
     if st.session_state.analysis_mode == "Historis":
         st.sidebar.markdown("---")
-        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data per 15 Menit", "📊 Ringkasan Performa"])
+        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data", "📊 Ringkasan Performa"])
 
         min_date = df_processed['Timestamp'].min().date()
         max_date = df_processed['Timestamp'].max().date()
         
-        date_range = st.sidebar.date_input(
-            "Pilih Rentang Tanggal",
-            value=(min_date, max_date),
-            min_value=min_date, max_value=max_date
-        )
+        date_range = st.sidebar.date_input("Pilih Rentang Tanggal", value=(min_date, max_date), min_value=min_date, max_value=max_date)
         
         time_filtered_df = pd.DataFrame()
         if len(date_range) == 2:
             start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
             time_filtered_df = df_processed[(df_processed['Timestamp'] >= start_date) & (df_processed['Timestamp'] <= end_date + pd.Timedelta(days=1))]
 
-        # --- PERUBAHAN: Filter dipindahkan ke Halaman Utama ---
         st.header("Filter Data")
         col1, col2 = st.columns(2)
-        
         with col1:
             all_studios = sorted(time_filtered_df['Nama Studio'].unique())
             selected_studios = st.multiselect("Filter Nama Studio", all_studios, default=all_studios)
-        
         with col2:
-            if selected_studios:
-                available_usernames = sorted(time_filtered_df[time_filtered_df['Nama Studio'].isin(selected_studios)]['Username'].unique())
-                selected_usernames = st.multiselect("Filter Akun (Username)", available_usernames, default=available_usernames)
-            else:
-                selected_usernames = []
-                st.multiselect("Filter Akun (Username)", [])
+            available_usernames = sorted(time_filtered_df[time_filtered_df['Nama Studio'].isin(selected_studios)]['Username'].unique()) if selected_studios else []
+            selected_usernames = st.multiselect("Filter Akun (Username)", available_usernames, default=available_usernames)
 
-        final_df = time_filtered_df[
-            time_filtered_df['Nama Studio'].isin(selected_studios) &
-            time_filtered_df['Username'].isin(selected_usernames)
-        ]
+        final_df = time_filtered_df[time_filtered_df['Nama Studio'].isin(selected_studios) & time_filtered_df['Username'].isin(selected_usernames)]
         st.markdown("---")
+
+        # --- PERUBAHAN: Opsi Agregasi Adaptif ---
+        agg_options = []
+        if st.session_state.detected_interval == "15 Menit": agg_options.extend(["15 Menit", "Per Jam", "Per Hari"])
+        elif st.session_state.detected_interval == "Per Jam": agg_options.extend(["Per Jam", "Per Hari"])
+        elif st.session_state.detected_interval == "Per Hari": agg_options.extend(["Per Hari"])
         # --- AKHIR PERUBAHAN ---
 
         if menu == "📈 Analisis Tren Waktu":
             st.subheader("📈 Analisis Tren Performa Berdasarkan Waktu")
-            if not final_df.empty:
-                agg_option = st.selectbox("Agregasi Waktu", ["15 Menit", "Per Jam", "Per Hari"])
+            if not final_df.empty and agg_options:
+                agg_option = st.selectbox("Agregasi Waktu", agg_options)
                 agg_map = {"15 Menit": "15T", "Per Jam": "H", "Per Hari": "D"}
-                
                 df_agg = final_df.set_index('Timestamp')[['Penjualan', 'Biaya_Iklan', 'Profit']].resample(agg_map[agg_option]).sum().reset_index()
-
                 st.subheader(f"Tren Agregasi {agg_option}")
                 st.line_chart(df_agg.set_index('Timestamp'))
-
                 st.markdown("---")
                 st.subheader("🏆 Analisis Jam Emas (Golden Hours)")
                 hourly_summary = final_df.copy()
@@ -235,12 +233,26 @@ if not st.session_state.df_processed.empty:
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
         
-        elif menu == "📄 Tabel Data per 15 Menit":
-            st.subheader("📄 Tabel Rincian per 15 Menit")
-            st.info("Tabel ini menampilkan biaya iklan asli (tanpa PPN).")
-            if not final_df.empty:
-                active_data = final_df[(final_df['Penjualan'] > 0) | (final_df['Biaya_Iklan'] > 0)]
-                st.dataframe(style_summary_table(active_data[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View']]), use_container_width=True)
+        elif menu == "📄 Tabel Data":
+            st.subheader("📄 Tabel Rincian Data")
+            if not final_df.empty and agg_options:
+                agg_option_table = st.selectbox("Pilih Agregasi Tabel", agg_options)
+                st.info("Tabel ini menampilkan biaya iklan asli (tanpa PPN).")
+                
+                display_df = pd.DataFrame()
+                if agg_option_table == "15 Menit":
+                    display_df = final_df[(final_df['Penjualan'] > 0) | (final_df['Biaya_Iklan'] > 0)]
+                    display_df = display_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View']]
+                elif agg_option_table == "Per Jam":
+                    display_df = final_df.set_index('Timestamp').groupby('Username').resample('H').sum(numeric_only=True).reset_index()
+                    display_df = display_df.rename(columns={'Timestamp': 'Waktu'})
+                    display_df['Waktu'] = display_df['Waktu'].dt.strftime('%Y-%m-%d %H:00')
+                elif agg_option_table == "Per Hari":
+                    display_df = final_df.set_index('Timestamp').groupby('Username').resample('D').sum(numeric_only=True).reset_index()
+                    display_df = display_df.rename(columns={'Timestamp': 'Tanggal'})
+                    display_df['Tanggal'] = display_df['Tanggal'].dt.date
+                
+                st.dataframe(style_summary_table(display_df), use_container_width=True)
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
 
@@ -262,10 +274,8 @@ if not st.session_state.df_processed.empty:
 
                 st.markdown("---")
                 summary = final_df.groupby(['Nama Studio', 'Username']).agg(
-                    Penjualan=("Penjualan", "sum"),
-                    Biaya_Iklan=("Biaya_Iklan", "sum"),
-                    Komisi=("Komisi", "sum"),
-                    View=("View", "sum")
+                    Penjualan=("Penjualan", "sum"), Biaya_Iklan=("Biaya_Iklan", "sum"),
+                    Komisi=("Komisi", "sum"), View=("View", "sum")
                 ).reset_index()
                 
                 summary['Biaya_Iklan_PPN'] = summary['Biaya_Iklan'] * 1.11
@@ -276,11 +286,7 @@ if not st.session_state.df_processed.empty:
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
 
-    # ===================================================================
-    # --- TAMPILAN UNTUK MODE ANALISIS RINGKASAN ---
-    # ===================================================================
     elif st.session_state.analysis_mode == "Ringkasan":
-        # Filter untuk mode ringkasan tetap di sidebar untuk konsistensi dengan versi lama
         all_studios = sorted(df_processed['Nama Studio'].unique())
         selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
         filtered_df = df_processed[df_processed['Nama Studio'].isin(selected_studios)] if selected_studios else pd.DataFrame()
