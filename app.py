@@ -43,10 +43,25 @@ def parse_historical_data(raw_data, commission_rate):
     lines = raw_data.strip().split('\n')
     header = lines[0].split('\t')
     
-    # Cari indeks awal kolom tanggal
+    # --- PERBAIKAN ERROR DIMULAI DI SINI ---
     try:
         time_cols_start_index = 5 # Nama, User, Saldo, Total Penjualan, Total Biaya
-        timestamps = pd.to_datetime(header[time_cols_start_index:])
+        
+        # 1. Buat daftar header waktu yang valid (tidak kosong) beserta indeks aslinya
+        valid_time_headers_with_indices = []
+        for i, h in enumerate(header[time_cols_start_index:]):
+            if h.strip(): # Hanya proses header yang tidak kosong
+                original_index = time_cols_start_index + i
+                valid_time_headers_with_indices.append((original_index, h.strip()))
+
+        # 2. Ekstrak hanya string tanggal untuk dikonversi
+        timestamp_strings = [h for _, h in valid_time_headers_with_indices]
+        if not timestamp_strings:
+            st.error("Tidak ada kolom tanggal yang valid ditemukan di header.")
+            return pd.DataFrame()
+            
+        timestamps = pd.to_datetime(timestamp_strings)
+    # --- AKHIR PERBAIKAN ---
     except Exception as e:
         st.error(f"Gagal mem-parsing header tanggal. Pastikan formatnya benar. Error: {e}")
         return pd.DataFrame()
@@ -60,11 +75,12 @@ def parse_historical_data(raw_data, commission_rate):
         nama_studio = parts[0]
         username = parts[1]
         
+        # 3. Looping menggunakan daftar header yang sudah bersih
         for i, ts in enumerate(timestamps):
-            data_index = time_cols_start_index + i
-            if data_index >= len(parts): continue
+            original_data_index = valid_time_headers_with_indices[i][0]
+            if original_data_index >= len(parts): continue
 
-            data_cell = parts[data_index].strip()
+            data_cell = parts[original_data_index].strip()
             
             try:
                 # Format: biaya|penjualan|efektivitas%|view
@@ -75,7 +91,6 @@ def parse_historical_data(raw_data, commission_rate):
                 penjualan = float(cell_parts[1].replace(".", "") or 0)
                 view = int(cell_parts[3].replace(".", "") or 0)
                 
-                # Tambahkan PPN 11%
                 biaya_dengan_ppn = biaya * 1.11
                 komisi = penjualan * (commission_rate / 100)
                 profit = komisi - biaya_dengan_ppn
@@ -88,14 +103,13 @@ def parse_historical_data(raw_data, commission_rate):
                 })
 
             except (ValueError, IndexError):
-                continue # Abaikan sel yang formatnya salah
+                continue
 
     return pd.DataFrame(records)
 
 # --- Parser untuk Data Ringkasan (Format Lama) ---
 @st.cache_data
 def parse_summary_data(raw_data, commission_rate):
-    # Implementasi parser lama tetap di sini
     lines = raw_data.strip().split('\n')
     records = []
     for line in lines:
@@ -163,7 +177,6 @@ if analysis_mode != "Pilih Mode...":
 if not st.session_state.df_processed.empty:
     df_processed = st.session_state.df_processed
     
-    # --- Filter Umum ---
     all_studios = df_processed['Nama Studio'].unique()
     selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
     
@@ -179,7 +192,6 @@ if not st.session_state.df_processed.empty:
         if menu == "📈 Analisis Tren Waktu":
             st.subheader("📈 Analisis Tren Performa Berdasarkan Waktu")
             
-            # Filter Tanggal & Waktu
             min_date = filtered_df['Timestamp'].min().date()
             max_date = filtered_df['Timestamp'].max().date()
             
@@ -193,7 +205,6 @@ if not st.session_state.df_processed.empty:
                 start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
                 time_filtered_df = filtered_df[(filtered_df['Timestamp'] >= start_date) & (filtered_df['Timestamp'] <= end_date + pd.Timedelta(days=1))]
 
-                # Agregasi Data
                 agg_option = st.sidebar.selectbox("Agregasi Waktu", ["15 Menit", "Per Jam", "Per Hari"])
                 agg_map = {"15 Menit": "15T", "Per Jam": "H", "Per Hari": "D"}
                 
@@ -227,7 +238,6 @@ if not st.session_state.df_processed.empty:
     # --- TAMPILAN UNTUK MODE ANALISIS RINGKASAN ---
     # ===================================================================
     elif st.session_state.analysis_mode == "Ringkasan" and not filtered_df.empty:
-        # Tampilkan menu dan halaman dari v5
         menu_options = ["📊 Ringkasan Performa", "🏢 Ringkasan per Studio", "🕵️ Akun Anomali", "📥 Download Data"]
         menu = st.sidebar.radio("Pilih Halaman", menu_options)
 
@@ -248,7 +258,6 @@ if not st.session_state.df_processed.empty:
             st.subheader("Data Lengkap")
             st.dataframe(style_summary_table(filtered_df), use_container_width=True)
 
-        # Halaman lain dari v5 bisa ditambahkan di sini jika perlu
         elif menu == "🏢 Ringkasan per Studio":
             st.subheader("🏢 Ringkasan Performa per Studio")
             studio_summary = filtered_df.groupby("Nama Studio").agg(
