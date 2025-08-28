@@ -26,8 +26,8 @@ def style_profit_color(val):
 def style_summary_table(df_to_style):
     formatters = {
         "Penjualan": format_rupiah, "Biaya_Iklan": format_rupiah,
-        "Komisi": format_rupiah, "Profit": format_rupiah,
-        "ROAS": "{:.2f}", "View": "{:,.0f}"
+        "Biaya_Iklan_PPN": format_rupiah, "Komisi": format_rupiah, 
+        "Profit": format_rupiah, "ROAS": "{:.2f}", "View": "{:,.0f}"
     }
     valid_formatters = {k: v for k, v in formatters.items() if k in df_to_style.columns}
     styled = df_to_style.style.format(valid_formatters)
@@ -44,8 +44,7 @@ def parse_historical_data(raw_data, commission_rate):
     header = lines[0].split('\t')
     
     try:
-        time_cols_start_index = 5 # Nama, User, Saldo, Total Penjualan, Total Biaya
-        
+        time_cols_start_index = 5
         valid_time_headers_with_indices = []
         for i, h in enumerate(header[time_cols_start_index:]):
             if h.strip():
@@ -81,18 +80,19 @@ def parse_historical_data(raw_data, commission_rate):
                 cell_parts = data_cell.split('|')
                 if len(cell_parts) < 4: continue
 
-                biaya = float(cell_parts[0].replace(".", "") or 0)
+                # Biaya iklan sekarang adalah nilai asli tanpa PPN
+                biaya_iklan = float(cell_parts[0].replace(".", "") or 0)
                 penjualan = float(cell_parts[1].replace(".", "") or 0)
                 view = int(cell_parts[3].replace(".", "") or 0)
                 
-                biaya_dengan_ppn = biaya * 1.11
                 komisi = penjualan * (commission_rate / 100)
-                profit = komisi - biaya_dengan_ppn
-                roas = penjualan / biaya_dengan_ppn if biaya_dengan_ppn > 0 else 0
+                # Profit di sini juga dihitung dari biaya asli
+                profit = komisi - biaya_iklan
+                roas = penjualan / biaya_iklan if biaya_iklan > 0 else 0
 
                 records.append({
                     "Timestamp": ts, "Nama Studio": nama_studio, "Username": username,
-                    "Biaya_Iklan": biaya_dengan_ppn, "Penjualan": penjualan, "View": view,
+                    "Biaya_Iklan": biaya_iklan, "Penjualan": penjualan, "View": view,
                     "Komisi": komisi, "Profit": profit, "ROAS": roas
                 })
 
@@ -181,10 +181,8 @@ if not st.session_state.df_processed.empty:
     # ===================================================================
     if st.session_state.analysis_mode == "Historis" and not filtered_df.empty:
         st.sidebar.markdown("---")
-        # --- PERUBAHAN: Tambah menu baru ---
         menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data per 15 Menit", "📊 Ringkasan Performa"])
 
-        # --- Filter Tanggal dipindahkan ke atas agar berlaku untuk semua halaman ---
         min_date = filtered_df['Timestamp'].min().date()
         max_date = filtered_df['Timestamp'].max().date()
         
@@ -212,43 +210,51 @@ if not st.session_state.df_processed.empty:
 
                 st.markdown("---")
                 st.subheader("🏆 Analisis Jam Emas (Golden Hours)")
-                st.info("Grafik ini menunjukkan total performa yang dikelompokkan berdasarkan jam dalam sehari.")
-                
                 hourly_summary = time_filtered_df.copy()
                 hourly_summary['Jam'] = hourly_summary['Timestamp'].dt.hour
                 golden_hours_df = hourly_summary.groupby('Jam')[['Penjualan', 'Profit']].sum()
-                
                 st.bar_chart(golden_hours_df)
             else:
                 st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
         
-        # --- HALAMAN BARU: TABEL DATA PER 15 MENIT ---
         elif menu == "📄 Tabel Data per 15 Menit":
             st.subheader("📄 Tabel Rincian per 15 Menit")
-            st.info("Tabel ini menampilkan data mentah untuk setiap interval waktu. Gunakan filter di sidebar untuk memilih akun dan rentang tanggal.")
-            
+            st.info("Tabel ini menampilkan biaya iklan asli (tanpa PPN).")
             if not time_filtered_df.empty:
-                # Tampilkan hanya data yang ada aktivitasnya untuk kejelasan
                 active_data = time_filtered_df[(time_filtered_df['Penjualan'] > 0) | (time_filtered_df['Biaya_Iklan'] > 0)]
-                st.dataframe(
-                    style_summary_table(active_data[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View']]),
-                    use_container_width=True
-                )
+                st.dataframe(style_summary_table(active_data[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View']]), use_container_width=True)
             else:
                 st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
 
         elif menu == "📊 Ringkasan Performa":
             st.subheader("📊 Ringkasan Performa Total")
-            st.info("Tabel ini adalah rekapitulasi total dari data pada rentang tanggal yang dipilih.")
+            st.info("Pada ringkasan ini, PPN 11% ditambahkan ke Total Biaya Iklan untuk menghitung Profit Bersih.")
             if not time_filtered_df.empty:
+                total_penjualan = time_filtered_df['Penjualan'].sum()
+                total_biaya_asli = time_filtered_df['Biaya_Iklan'].sum()
+                total_biaya_ppn = total_biaya_asli * 1.11
+                total_komisi = time_filtered_df['Komisi'].sum()
+                total_profit_bersih = total_komisi - total_biaya_ppn
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Penjualan", format_rupiah(total_penjualan))
+                col2.metric("Total Biaya Iklan (+PPN 11%)", format_rupiah(total_biaya_ppn))
+                col3.metric(f"Total Komisi ({commission_input}%)", format_rupiah(total_komisi))
+                col4.metric("Profit Bersih (Setelah PPN)", format_rupiah(total_profit_bersih), delta_color=("inverse" if total_profit_bersih < 0 else "normal"))
+
+                st.markdown("---")
                 summary = time_filtered_df.groupby(['Nama Studio', 'Username']).agg(
                     Penjualan=("Penjualan", "sum"),
                     Biaya_Iklan=("Biaya_Iklan", "sum"),
-                    Profit=("Profit", "sum"),
+                    Komisi=("Komisi", "sum"),
                     View=("View", "sum")
                 ).reset_index()
-                summary['ROAS'] = (summary['Penjualan'] / summary['Biaya_Iklan']).fillna(0)
-                st.dataframe(style_summary_table(summary), use_container_width=True)
+                
+                summary['Biaya_Iklan_PPN'] = summary['Biaya_Iklan'] * 1.11
+                summary['Profit'] = summary['Komisi'] - summary['Biaya_Iklan_PPN']
+                summary['ROAS'] = (summary['Penjualan'] / summary['Biaya_Iklan_PPN']).fillna(0)
+                
+                st.dataframe(style_summary_table(summary[['Nama Studio', 'Username', 'Penjualan', 'Biaya_Iklan_PPN', 'Profit', 'ROAS', 'View']].rename(columns={"Biaya_Iklan_PPN": "Biaya_Iklan"})), use_container_width=True)
             else:
                 st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
 
@@ -256,7 +262,7 @@ if not st.session_state.df_processed.empty:
     # --- TAMPILAN UNTUK MODE ANALISIS RINGKASAN ---
     # ===================================================================
     elif st.session_state.analysis_mode == "Ringkasan" and not filtered_df.empty:
-        menu_options = ["📊 Ringkasan Performa", "🏢 Ringkasan per Studio", "🕵️ Akun Anomali", "📥 Download Data"]
+        menu_options = ["📊 Ringkasan Performa", "🏢 Ringkasan per Studio", "📥 Download Data"]
         menu = st.sidebar.radio("Pilih Halaman", menu_options)
 
         if menu == "📊 Ringkasan Performa":
@@ -284,16 +290,6 @@ if not st.session_state.df_processed.empty:
             ).reset_index()
             studio_summary['ROAS'] = (studio_summary['Penjualan'] / studio_summary['Biaya_Iklan']).fillna(0)
             st.dataframe(style_summary_table(studio_summary), use_container_width=True)
-
-        elif menu == "🕵️ Akun Anomali":
-            st.subheader("🕵️ Analisis Akun Anomali")
-            st.warning("Fitur ini paling akurat untuk data ringkasan total.")
-            akun_tanpa_penjualan = filtered_df[(filtered_df['Penjualan'] == 0) & (filtered_df['Biaya_Iklan'] > 0)]
-            if not akun_tanpa_penjualan.empty:
-                st.write("⚠️ Akun Tanpa Penjualan (Biaya > 0)")
-                st.dataframe(style_summary_table(akun_tanpa_penjualan), use_container_width=True)
-            else:
-                st.success("✅ Tidak ditemukan akun tanpa penjualan.")
 
         elif menu == "📥 Download Data":
             st.subheader("📥 Download Data yang Telah Diproses")
