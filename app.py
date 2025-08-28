@@ -69,7 +69,6 @@ def parse_historical_data(raw_data, commission_rate):
             
         nama_studio = parts[0]
         username = parts[1]
-        # --- PERUBAHAN: Baca Saldo ---
         try:
             saldo = float(parts[2].replace(".", "") or 0)
         except (ValueError, IndexError):
@@ -145,6 +144,7 @@ analysis_mode = st.sidebar.selectbox(
     ["Pilih Mode...", "Analisis Ringkasan (Total)", "Analisis Historis (Per Waktu)"]
 )
 
+raw_data = None
 if analysis_mode != "Pilih Mode...":
     if analysis_mode == "Analisis Historis (Per Waktu)":
         manual_interval = st.sidebar.selectbox(
@@ -158,11 +158,18 @@ if analysis_mode != "Pilih Mode...":
     )
     st.sidebar.markdown("---")
     
-    uploaded_file = st.sidebar.file_uploader("Upload file (.txt, .csv)", type=["txt", "csv"])
+    # --- PERUBAHAN: Tambah Pilihan Input ---
+    input_method = st.sidebar.radio("Pilih Cara Input", ["Upload File", "Paste Manual"])
     
-    if uploaded_file:
-        raw_data = uploaded_file.read().decode("utf-8")
-        
+    if input_method == "Upload File":
+        uploaded_file = st.sidebar.file_uploader("Upload file (.txt, .csv)", type=["txt", "csv"])
+        if uploaded_file:
+            raw_data = uploaded_file.read().decode("utf-8")
+    else: # Paste Manual
+        raw_data = st.sidebar.text_area("Paste data dari spreadsheet di sini", height=200)
+    # --- AKHIR PERUBAHAN ---
+    
+    if raw_data:
         if analysis_mode == "Analisis Historis (Per Waktu)":
             df = parse_historical_data(raw_data, commission_input)
             st.session_state.analysis_mode = "Historis"
@@ -182,8 +189,8 @@ if not st.session_state.df_processed.empty:
     
     if st.session_state.analysis_mode == "Historis":
         st.sidebar.markdown("---")
-        # --- PERUBAHAN: Tambah menu Peringatan ---
-        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data", "📊 Ringkasan Performa", "🚨 Peringatan Iklan"])
+        # --- PERUBAHAN: Ganti nama menu ---
+        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Database View", "📊 Ringkasan Performa", "🚨 Peringatan Iklan"])
 
         min_date = df_processed['Timestamp'].min().date()
         max_date = df_processed['Timestamp'].max().date()
@@ -229,11 +236,11 @@ if not st.session_state.df_processed.empty:
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
         
-        elif menu == "📄 Tabel Data":
-            st.subheader("📄 Tabel Rincian Data")
+        elif menu == "📄 Database View":
+            st.subheader("📄 Database View (Data yang Diproses)")
+            st.info("Ini adalah data mentah Anda yang telah diubah ke format database (long format) dan siap untuk dianalisis.")
             if not final_df.empty and agg_options:
                 agg_option_table = st.selectbox("Pilih Agregasi Tabel", agg_options)
-                st.info("Tabel ini menampilkan biaya iklan asli (tanpa PPN).")
                 
                 display_df = pd.DataFrame()
                 if agg_option_table == "15 Menit":
@@ -282,7 +289,6 @@ if not st.session_state.df_processed.empty:
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
 
-        # --- HALAMAN BARU: PERINGATAN IKLAN ---
         elif menu == "🚨 Peringatan Iklan":
             st.subheader("🚨 Peringatan Iklan Mendesak")
             st.warning("Akun-akun di bawah ini menghabiskan biaya iklan lebih dari Rp 10.000 dalam satu interval. Pertimbangkan untuk menjeda iklan segera.")
@@ -342,5 +348,5 @@ if not st.session_state.df_processed.empty:
             st.warning("Tidak ada data untuk ditampilkan. Silakan pilih setidaknya satu studio di sidebar.")
 
 else:
-    st.info("Selamat datang! Silakan pilih mode analisis dan upload file data Anda melalui sidebar untuk memulai.")
+    st.info("Selamat datang! Silakan pilih mode analisis dan masukkan data Anda melalui sidebar untuk memulai.")
 
