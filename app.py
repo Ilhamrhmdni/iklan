@@ -27,7 +27,8 @@ def style_summary_table(df_to_style):
     formatters = {
         "Penjualan": format_rupiah, "Biaya_Iklan": format_rupiah,
         "Biaya_Iklan_PPN": format_rupiah, "Komisi": format_rupiah, 
-        "Profit": format_rupiah, "ROAS": "{:.2f}", "View": "{:,.0f}"
+        "Profit": format_rupiah, "ROAS": "{:.2f}", "View": "{:,.0f}",
+        "Saldo": format_rupiah
     }
     valid_formatters = {k: v for k, v in formatters.items() if k in df_to_style.columns}
     styled = df_to_style.style.format(valid_formatters)
@@ -68,7 +69,12 @@ def parse_historical_data(raw_data, commission_rate):
             
         nama_studio = parts[0]
         username = parts[1]
-        
+        # --- PERUBAHAN: Baca Saldo ---
+        try:
+            saldo = float(parts[2].replace(".", "") or 0)
+        except (ValueError, IndexError):
+            saldo = 0
+
         for i, ts in enumerate(timestamps):
             original_data_index = valid_time_headers_with_indices[i][0]
             if original_data_index >= len(parts): continue
@@ -88,8 +94,8 @@ def parse_historical_data(raw_data, commission_rate):
 
                 records.append({
                     "Timestamp": ts, "Nama Studio": nama_studio, "Username": username,
-                    "Biaya_Iklan": biaya_iklan, "Penjualan": penjualan, "View": view,
-                    "Komisi": komisi, "Profit": profit, "ROAS": roas
+                    "Saldo": saldo, "Biaya_Iklan": biaya_iklan, "Penjualan": penjualan, 
+                    "View": view, "Komisi": komisi, "Profit": profit, "ROAS": roas
                 })
             except (ValueError, IndexError):
                 continue
@@ -140,14 +146,12 @@ analysis_mode = st.sidebar.selectbox(
 )
 
 if analysis_mode != "Pilih Mode...":
-    # --- PERUBAHAN: Pilihan Interval Manual ---
     if analysis_mode == "Analisis Historis (Per Waktu)":
         manual_interval = st.sidebar.selectbox(
             "Pilih Interval Data File Anda",
             ["15 Menit", "Per Jam", "Per Hari"]
         )
         st.session_state.manual_interval = manual_interval
-    # --- AKHIR PERUBAHAN ---
 
     commission_input = st.sidebar.number_input(
         "Persentase Komisi (%)", min_value=0.0, max_value=100.0, value=5.0, step=0.1
@@ -178,7 +182,8 @@ if not st.session_state.df_processed.empty:
     
     if st.session_state.analysis_mode == "Historis":
         st.sidebar.markdown("---")
-        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data", "📊 Ringkasan Performa"])
+        # --- PERUBAHAN: Tambah menu Peringatan ---
+        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data", "📊 Ringkasan Performa", "🚨 Peringatan Iklan"])
 
         min_date = df_processed['Timestamp'].min().date()
         max_date = df_processed['Timestamp'].max().date()
@@ -233,7 +238,7 @@ if not st.session_state.df_processed.empty:
                 display_df = pd.DataFrame()
                 if agg_option_table == "15 Menit":
                     display_df = final_df[(final_df['Penjualan'] > 0) | (final_df['Biaya_Iklan'] > 0)]
-                    display_df = display_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View']]
+                    display_df = display_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View', 'Saldo']]
                 elif agg_option_table == "Per Jam":
                     display_df = final_df.set_index('Timestamp').groupby('Username').resample('H').sum(numeric_only=True).reset_index()
                     display_df = display_df.rename(columns={'Timestamp': 'Waktu'})
@@ -266,16 +271,33 @@ if not st.session_state.df_processed.empty:
                 st.markdown("---")
                 summary = final_df.groupby(['Nama Studio', 'Username']).agg(
                     Penjualan=("Penjualan", "sum"), Biaya_Iklan=("Biaya_Iklan", "sum"),
-                    Komisi=("Komisi", "sum"), View=("View", "sum")
+                    Komisi=("Komisi", "sum"), View=("View", "sum"), Saldo=("Saldo", "first")
                 ).reset_index()
                 
                 summary['Biaya_Iklan_PPN'] = summary['Biaya_Iklan'] * 1.11
                 summary['Profit'] = summary['Komisi'] - summary['Biaya_Iklan_PPN']
                 summary['ROAS'] = (summary['Penjualan'] / summary['Biaya_Iklan_PPN']).fillna(0)
                 
-                st.dataframe(style_summary_table(summary[['Nama Studio', 'Username', 'Penjualan', 'Biaya_Iklan_PPN', 'Profit', 'ROAS', 'View']].rename(columns={"Biaya_Iklan_PPN": "Biaya_Iklan"})), use_container_width=True)
+                st.dataframe(style_summary_table(summary[['Nama Studio', 'Username', 'Penjualan', 'Biaya_Iklan_PPN', 'Profit', 'ROAS', 'View', 'Saldo']].rename(columns={"Biaya_Iklan_PPN": "Biaya_Iklan"})), use_container_width=True)
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
+
+        # --- HALAMAN BARU: PERINGATAN IKLAN ---
+        elif menu == "🚨 Peringatan Iklan":
+            st.subheader("🚨 Peringatan Iklan Mendesak")
+            st.warning("Akun-akun di bawah ini menghabiskan biaya iklan lebih dari Rp 10.000 dalam satu interval. Pertimbangkan untuk menjeda iklan segera.")
+            
+            threshold = 10000
+            warnings_df = final_df[final_df['Biaya_Iklan'] > threshold].copy()
+
+            if warnings_df.empty:
+                st.success("✅ Tidak ada akun yang melebihi batas pengeluaran iklan.")
+            else:
+                warnings_df = warnings_df.sort_values(by="Biaya_Iklan", ascending=False)
+                st.dataframe(
+                    style_summary_table(warnings_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Saldo']]),
+                    use_container_width=True
+                )
 
     elif st.session_state.analysis_mode == "Ringkasan":
         all_studios = sorted(df_processed['Nama Studio'].unique())
