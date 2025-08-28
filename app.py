@@ -43,25 +43,21 @@ def parse_historical_data(raw_data, commission_rate):
     lines = raw_data.strip().split('\n')
     header = lines[0].split('\t')
     
-    # --- PERBAIKAN ERROR DIMULAI DI SINI ---
     try:
         time_cols_start_index = 5 # Nama, User, Saldo, Total Penjualan, Total Biaya
         
-        # 1. Buat daftar header waktu yang valid (tidak kosong) beserta indeks aslinya
         valid_time_headers_with_indices = []
         for i, h in enumerate(header[time_cols_start_index:]):
-            if h.strip(): # Hanya proses header yang tidak kosong
+            if h.strip():
                 original_index = time_cols_start_index + i
                 valid_time_headers_with_indices.append((original_index, h.strip()))
 
-        # 2. Ekstrak hanya string tanggal untuk dikonversi
         timestamp_strings = [h for _, h in valid_time_headers_with_indices]
         if not timestamp_strings:
             st.error("Tidak ada kolom tanggal yang valid ditemukan di header.")
             return pd.DataFrame()
             
         timestamps = pd.to_datetime(timestamp_strings)
-    # --- AKHIR PERBAIKAN ---
     except Exception as e:
         st.error(f"Gagal mem-parsing header tanggal. Pastikan formatnya benar. Error: {e}")
         return pd.DataFrame()
@@ -75,7 +71,6 @@ def parse_historical_data(raw_data, commission_rate):
         nama_studio = parts[0]
         username = parts[1]
         
-        # 3. Looping menggunakan daftar header yang sudah bersih
         for i, ts in enumerate(timestamps):
             original_data_index = valid_time_headers_with_indices[i][0]
             if original_data_index >= len(parts): continue
@@ -83,7 +78,6 @@ def parse_historical_data(raw_data, commission_rate):
             data_cell = parts[original_data_index].strip()
             
             try:
-                # Format: biaya|penjualan|efektivitas%|view
                 cell_parts = data_cell.split('|')
                 if len(cell_parts) < 4: continue
 
@@ -187,24 +181,27 @@ if not st.session_state.df_processed.empty:
     # ===================================================================
     if st.session_state.analysis_mode == "Historis" and not filtered_df.empty:
         st.sidebar.markdown("---")
-        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📊 Ringkasan Performa"])
+        # --- PERUBAHAN: Tambah menu baru ---
+        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data per 15 Menit", "📊 Ringkasan Performa"])
+
+        # --- Filter Tanggal dipindahkan ke atas agar berlaku untuk semua halaman ---
+        min_date = filtered_df['Timestamp'].min().date()
+        max_date = filtered_df['Timestamp'].max().date()
+        
+        date_range = st.sidebar.date_input(
+            "Pilih Rentang Tanggal",
+            value=(min_date, max_date),
+            min_value=min_date, max_value=max_date
+        )
+        
+        time_filtered_df = pd.DataFrame()
+        if len(date_range) == 2:
+            start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+            time_filtered_df = filtered_df[(filtered_df['Timestamp'] >= start_date) & (filtered_df['Timestamp'] <= end_date + pd.Timedelta(days=1))]
 
         if menu == "📈 Analisis Tren Waktu":
             st.subheader("📈 Analisis Tren Performa Berdasarkan Waktu")
-            
-            min_date = filtered_df['Timestamp'].min().date()
-            max_date = filtered_df['Timestamp'].max().date()
-            
-            date_range = st.sidebar.date_input(
-                "Pilih Rentang Tanggal",
-                value=(min_date, max_date),
-                min_value=min_date, max_value=max_date
-            )
-            
-            if len(date_range) == 2:
-                start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-                time_filtered_df = filtered_df[(filtered_df['Timestamp'] >= start_date) & (filtered_df['Timestamp'] <= end_date + pd.Timedelta(days=1))]
-
+            if not time_filtered_df.empty:
                 agg_option = st.sidebar.selectbox("Agregasi Waktu", ["15 Menit", "Per Jam", "Per Hari"])
                 agg_map = {"15 Menit": "15T", "Per Jam": "H", "Per Hari": "D"}
                 
@@ -222,17 +219,38 @@ if not st.session_state.df_processed.empty:
                 golden_hours_df = hourly_summary.groupby('Jam')[['Penjualan', 'Profit']].sum()
                 
                 st.bar_chart(golden_hours_df)
+            else:
+                st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
+        
+        # --- HALAMAN BARU: TABEL DATA PER 15 MENIT ---
+        elif menu == "📄 Tabel Data per 15 Menit":
+            st.subheader("📄 Tabel Rincian per 15 Menit")
+            st.info("Tabel ini menampilkan data mentah untuk setiap interval waktu. Gunakan filter di sidebar untuk memilih akun dan rentang tanggal.")
+            
+            if not time_filtered_df.empty:
+                # Tampilkan hanya data yang ada aktivitasnya untuk kejelasan
+                active_data = time_filtered_df[(time_filtered_df['Penjualan'] > 0) | (time_filtered_df['Biaya_Iklan'] > 0)]
+                st.dataframe(
+                    style_summary_table(active_data[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View']]),
+                    use_container_width=True
+                )
+            else:
+                st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
 
         elif menu == "📊 Ringkasan Performa":
             st.subheader("📊 Ringkasan Performa Total")
-            summary = filtered_df.groupby(['Nama Studio', 'Username']).agg(
-                Penjualan=("Penjualan", "sum"),
-                Biaya_Iklan=("Biaya_Iklan", "sum"),
-                Profit=("Profit", "sum"),
-                View=("View", "sum")
-            ).reset_index()
-            summary['ROAS'] = (summary['Penjualan'] / summary['Biaya_Iklan']).fillna(0)
-            st.dataframe(style_summary_table(summary), use_container_width=True)
+            st.info("Tabel ini adalah rekapitulasi total dari data pada rentang tanggal yang dipilih.")
+            if not time_filtered_df.empty:
+                summary = time_filtered_df.groupby(['Nama Studio', 'Username']).agg(
+                    Penjualan=("Penjualan", "sum"),
+                    Biaya_Iklan=("Biaya_Iklan", "sum"),
+                    Profit=("Profit", "sum"),
+                    View=("View", "sum")
+                ).reset_index()
+                summary['ROAS'] = (summary['Penjualan'] / summary['Biaya_Iklan']).fillna(0)
+                st.dataframe(style_summary_table(summary), use_container_width=True)
+            else:
+                st.warning("Tidak ada data pada rentang tanggal yang dipilih.")
 
     # ===================================================================
     # --- TAMPILAN UNTUK MODE ANALISIS RINGKASAN ---
