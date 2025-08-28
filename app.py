@@ -171,10 +171,26 @@ if analysis_mode != "Pilih Mode...":
 if not st.session_state.df_processed.empty:
     df_processed = st.session_state.df_processed
     
-    all_studios = df_processed['Nama Studio'].unique()
-    selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
+    # --- PERUBAHAN: Penambahan Filter Akun ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("Filter Data")
     
-    filtered_df = df_processed[df_processed['Nama Studio'].isin(selected_studios)] if selected_studios else pd.DataFrame()
+    # Filter Studio
+    all_studios = sorted(df_processed['Nama Studio'].unique())
+    selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
+
+    # Filter Akun (dinamis berdasarkan studio yang dipilih)
+    if selected_studios:
+        available_usernames = sorted(df_processed[df_processed['Nama Studio'].isin(selected_studios)]['Username'].unique())
+        selected_usernames = st.sidebar.multiselect("Filter Akun (Username)", available_usernames, default=available_usernames)
+        
+        filtered_df = df_processed[
+            df_processed['Nama Studio'].isin(selected_studios) &
+            df_processed['Username'].isin(selected_usernames)
+        ]
+    else:
+        filtered_df = pd.DataFrame()
+    # --- AKHIR PERUBAHAN ---
 
     # ===================================================================
     # --- TAMPILAN UNTUK MODE ANALISIS HISTORIS ---
@@ -297,7 +313,7 @@ if not st.session_state.df_processed.empty:
             st.download_button("⬇️ Download CSV", data=csv_data, file_name="analisis_roas_ringkasan.csv", mime="text/csv")
 
     elif filtered_df.empty:
-        st.warning("Tidak ada data untuk ditampilkan. Silakan pilih setidaknya satu studio di sidebar.")
+        st.warning("Tidak ada data untuk ditampilkan. Silakan pilih setidaknya satu studio atau akun di sidebar.")
 
 else:
     st.info("Selamat datang! Silakan pilih mode analisis dan upload file data Anda melalui sidebar untuk memulai.")
