@@ -43,8 +43,6 @@ def parse_historical_data(raw_data, commission_rate):
     lines = raw_data.strip().split('\n')
     header = lines[0].split('\t')
     
-    detected_interval = None
-    
     try:
         time_cols_start_index = 5
         valid_time_headers_with_indices = []
@@ -55,21 +53,12 @@ def parse_historical_data(raw_data, commission_rate):
 
         timestamp_strings = [h for _, h in valid_time_headers_with_indices]
         if not timestamp_strings:
-            return pd.DataFrame(), None
+            return pd.DataFrame()
             
         timestamps = pd.to_datetime(timestamp_strings)
-
-        # --- PERUBAHAN: Deteksi Interval Otomatis ---
-        if len(timestamps) > 1:
-            delta = (timestamps[1] - timestamps[0]).total_seconds()
-            if delta == 900: detected_interval = "15 Menit"
-            elif delta == 3600: detected_interval = "Per Jam"
-            elif delta == 86400: detected_interval = "Per Hari"
-        # --- AKHIR PERUBAHAN ---
-
     except Exception as e:
         st.error(f"Gagal mem-parsing header tanggal. Pastikan formatnya benar. Error: {e}")
-        return pd.DataFrame(), None
+        return pd.DataFrame()
 
     records = []
     for line in lines[1:]:
@@ -105,12 +94,11 @@ def parse_historical_data(raw_data, commission_rate):
             except (ValueError, IndexError):
                 continue
 
-    return pd.DataFrame(records), detected_interval
+    return pd.DataFrame(records)
 
 # --- Parser untuk Data Ringkasan (Format Lama) ---
 @st.cache_data
 def parse_summary_data(raw_data, commission_rate):
-    # ... (kode parser ini tidak berubah) ...
     lines = raw_data.strip().split('\n')
     records = []
     for line in lines:
@@ -141,8 +129,8 @@ if 'df_processed' not in st.session_state:
     st.session_state.df_processed = pd.DataFrame()
 if 'analysis_mode' not in st.session_state:
     st.session_state.analysis_mode = None
-if 'detected_interval' not in st.session_state:
-    st.session_state.detected_interval = None
+if 'manual_interval' not in st.session_state:
+    st.session_state.manual_interval = None
 
 # === Sidebar & Input ===
 st.sidebar.title("⚙️ Pengaturan & Filter")
@@ -152,6 +140,15 @@ analysis_mode = st.sidebar.selectbox(
 )
 
 if analysis_mode != "Pilih Mode...":
+    # --- PERUBAHAN: Pilihan Interval Manual ---
+    if analysis_mode == "Analisis Historis (Per Waktu)":
+        manual_interval = st.sidebar.selectbox(
+            "Pilih Interval Data File Anda",
+            ["15 Menit", "Per Jam", "Per Hari"]
+        )
+        st.session_state.manual_interval = manual_interval
+    # --- AKHIR PERUBAHAN ---
+
     commission_input = st.sidebar.number_input(
         "Persentase Komisi (%)", min_value=0.0, max_value=100.0, value=5.0, step=0.1
     )
@@ -163,19 +160,15 @@ if analysis_mode != "Pilih Mode...":
         raw_data = uploaded_file.read().decode("utf-8")
         
         if analysis_mode == "Analisis Historis (Per Waktu)":
-            df, detected_interval = parse_historical_data(raw_data, commission_input)
+            df = parse_historical_data(raw_data, commission_input)
             st.session_state.analysis_mode = "Historis"
-            st.session_state.detected_interval = detected_interval
-        else: # Analisis Ringkasan
+        else:
             df = parse_summary_data(raw_data, commission_input)
             st.session_state.analysis_mode = "Ringkasan"
-            st.session_state.detected_interval = None
         
         if not df.empty:
             st.session_state.df_processed = df
             st.sidebar.success(f"✅ Data berhasil diparsing!")
-            if st.session_state.detected_interval:
-                st.sidebar.info(f"Interval data terdeteksi: **{st.session_state.detected_interval}**")
         else:
             st.sidebar.error("Gagal memproses data. Periksa format file.")
 
@@ -209,12 +202,10 @@ if not st.session_state.df_processed.empty:
         final_df = time_filtered_df[time_filtered_df['Nama Studio'].isin(selected_studios) & time_filtered_df['Username'].isin(selected_usernames)]
         st.markdown("---")
 
-        # --- PERUBAHAN: Opsi Agregasi Adaptif ---
         agg_options = []
-        if st.session_state.detected_interval == "15 Menit": agg_options.extend(["15 Menit", "Per Jam", "Per Hari"])
-        elif st.session_state.detected_interval == "Per Jam": agg_options.extend(["Per Jam", "Per Hari"])
-        elif st.session_state.detected_interval == "Per Hari": agg_options.extend(["Per Hari"])
-        # --- AKHIR PERUBAHAN ---
+        if st.session_state.manual_interval == "15 Menit": agg_options.extend(["15 Menit", "Per Jam", "Per Hari"])
+        elif st.session_state.manual_interval == "Per Jam": agg_options.extend(["Per Jam", "Per Hari"])
+        elif st.session_state.manual_interval == "Per Hari": agg_options.extend(["Per Hari"])
 
         if menu == "📈 Analisis Tren Waktu":
             st.subheader("📈 Analisis Tren Performa Berdasarkan Waktu")
