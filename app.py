@@ -158,7 +158,6 @@ if analysis_mode != "Pilih Mode...":
     )
     st.sidebar.markdown("---")
     
-    # --- PERUBAHAN: Tambah Pilihan Input ---
     input_method = st.sidebar.radio("Pilih Cara Input", ["Upload File", "Paste Manual"])
     
     if input_method == "Upload File":
@@ -167,7 +166,6 @@ if analysis_mode != "Pilih Mode...":
             raw_data = uploaded_file.read().decode("utf-8")
     else: # Paste Manual
         raw_data = st.sidebar.text_area("Paste data dari spreadsheet di sini", height=200)
-    # --- AKHIR PERUBAHAN ---
     
     if raw_data:
         if analysis_mode == "Analisis Historis (Per Waktu)":
@@ -189,7 +187,6 @@ if not st.session_state.df_processed.empty:
     
     if st.session_state.analysis_mode == "Historis":
         st.sidebar.markdown("---")
-        # --- PERUBAHAN: Ganti nama menu ---
         menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Database View", "📊 Ringkasan Performa", "🚨 Peringatan Iklan"])
 
         min_date = df_processed['Timestamp'].min().date()
@@ -289,21 +286,28 @@ if not st.session_state.df_processed.empty:
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
 
+        # --- PERUBAHAN: Logika Peringatan Diperbarui ---
         elif menu == "🚨 Peringatan Iklan":
             st.subheader("🚨 Peringatan Iklan Mendesak")
-            st.warning("Akun-akun di bawah ini menghabiskan biaya iklan lebih dari Rp 10.000 dalam satu interval. Pertimbangkan untuk menjeda iklan segera.")
+            st.warning("Akun di bawah ini menghabiskan biaya > Rp 5.000 dengan ROAS < 30 dalam satu interval. Pertimbangkan untuk menjeda iklan.")
             
-            threshold = 10000
-            warnings_df = final_df[final_df['Biaya_Iklan'] > threshold].copy()
+            cost_threshold = 5000
+            roas_threshold = 30
+            
+            warnings_df = final_df[
+                (final_df['Biaya_Iklan'] > cost_threshold) &
+                (final_df['ROAS'] < roas_threshold)
+            ].copy()
 
             if warnings_df.empty:
-                st.success("✅ Tidak ada akun yang melebihi batas pengeluaran iklan.")
+                st.success("✅ Tidak ada akun yang memenuhi kriteria peringatan.")
             else:
                 warnings_df = warnings_df.sort_values(by="Biaya_Iklan", ascending=False)
                 st.dataframe(
-                    style_summary_table(warnings_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Saldo']]),
+                    style_summary_table(warnings_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'ROAS', 'Saldo']]),
                     use_container_width=True
                 )
+        # --- AKHIR PERUBAHAN ---
 
     elif st.session_state.analysis_mode == "Ringkasan":
         all_studios = sorted(df_processed['Nama Studio'].unique())
