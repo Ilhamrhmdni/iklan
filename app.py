@@ -26,7 +26,7 @@ def style_profit_color(val):
 def style_summary_table(df_to_style):
     formatters = {
         "Penjualan": format_rupiah, "Biaya_Iklan": format_rupiah,
-        "Biaya_Iklan_PPN": format_rupiah, "Komisi": format_rupiah, 
+        "Biaya_Iklan_PPN": format_rupiah, "Komisi": format_rupiah,
         "Profit": format_rupiah, "ROAS": "{:.2f}", "View": "{:,.0f}",
         "Saldo": format_rupiah
     }
@@ -187,7 +187,8 @@ if not st.session_state.df_processed.empty:
     
     if st.session_state.analysis_mode == "Historis":
         st.sidebar.markdown("---")
-        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Database View", "📊 Ringkasan Performa", "🚨 Peringatan Iklan"])
+        # PERUBAHAN NAMA MENU
+        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data Rinci", "📊 Ringkasan Performa", "🚨 Peringatan Iklan"])
 
         min_date = df_processed['Timestamp'].min().date()
         max_date = df_processed['Timestamp'].max().date()
@@ -233,28 +234,77 @@ if not st.session_state.df_processed.empty:
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
         
-        elif menu == "📄 Database View":
-            st.subheader("📄 Database View (Data yang Diproses)")
-            st.info("Ini adalah data mentah Anda yang telah diubah ke format database (long format) dan siap untuk dianalisis.")
+        # --- BLOK KODE YANG DIPERBARUI ---
+        elif menu == "📄 Tabel Data Rinci":
+            st.subheader("📄 Tabel Data Rinci")
+            st.info(
+                "Lihat data performa iklan Anda dalam format tabel. "
+                "Gunakan pilihan di bawah untuk meringkas data berdasarkan interval waktu yang berbeda, "
+                "seperti per jam atau per hari, untuk memudahkan analisis."
+            )
+
             if not final_df.empty and agg_options:
-                agg_option_table = st.selectbox("Pilih Agregasi Tabel", agg_options)
-                
+                agg_option_table = st.selectbox(
+                    "Ringkas Data Berdasarkan:",
+                    agg_options,
+                    help="Pilih bagaimana data akan dikelompokkan. '15 Menit' menampilkan data asli, 'Per Jam' menjumlahkan data setiap jam, dan 'Per Hari' menjumlahkan data harian."
+                )
+
                 display_df = pd.DataFrame()
+                styler = None
+
                 if agg_option_table == "15 Menit":
+                    st.markdown("##### 🕒 **Tabel Data per 15 Menit**")
+                    st.write(
+                        "Menampilkan setiap interval 15 menit di mana ada biaya iklan atau penjualan. "
+                        "Baris dengan biaya dan penjualan nol disembunyikan agar tabel lebih ringkas."
+                    )
                     display_df = final_df[(final_df['Penjualan'] > 0) | (final_df['Biaya_Iklan'] > 0)]
                     display_df = display_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View', 'Saldo']]
+                    styler = style_summary_table(display_df)
+
                 elif agg_option_table == "Per Jam":
-                    display_df = final_df.set_index('Timestamp').groupby('Username').resample('H').sum(numeric_only=True).reset_index()
-                    display_df = display_df.rename(columns={'Timestamp': 'Waktu'})
-                    display_df['Waktu'] = display_df['Waktu'].dt.strftime('%Y-%m-%d %H:00')
+                    st.markdown("##### ⏰ **Ringkasan Data per Jam**")
+                    st.write("Data dijumlahkan untuk setiap jam untuk melihat performa pada jam-jam tertentu.")
+                    df_hourly = final_df.set_index('Timestamp').groupby('Username').resample('H').sum(numeric_only=True).reset_index()
+                    display_df = df_hourly[(df_hourly['Penjualan'] > 0) | (df_hourly['Biaya_Iklan'] > 0)].copy()
+                    display_df.rename(columns={
+                        'Timestamp': 'Waktu (Mulai)', 'Biaya_Iklan': 'Total Biaya Iklan',
+                        'Penjualan': 'Total Penjualan', 'Profit': 'Total Profit', 'View': 'Total View'
+                    }, inplace=True)
+                    display_df['Waktu (Mulai)'] = display_df['Waktu (Mulai)'].dt.strftime('%Y-%m-%d %H:%M')
+                    display_df = display_df[['Waktu (Mulai)', 'Username', 'Total Biaya Iklan', 'Total Penjualan', 'Total Profit', 'Total View']]
+
                 elif agg_option_table == "Per Hari":
-                    display_df = final_df.set_index('Timestamp').groupby('Username').resample('D').sum(numeric_only=True).reset_index()
-                    display_df = display_df.rename(columns={'Timestamp': 'Tanggal'})
+                    st.markdown("##### 📅 **Ringkasan Data per Hari**")
+                    st.write("Data dijumlahkan untuk setiap hari untuk melihat performa harian secara keseluruhan.")
+                    df_daily = final_df.set_index('Timestamp').groupby('Username').resample('D').sum(numeric_only=True).reset_index()
+                    display_df = df_daily[(df_daily['Penjualan'] > 0) | (df_daily['Biaya_Iklan'] > 0)].copy()
+                    display_df.rename(columns={
+                        'Timestamp': 'Tanggal', 'Biaya_Iklan': 'Total Biaya Iklan',
+                        'Penjualan': 'Total Penjualan', 'Profit': 'Total Profit', 'View': 'Total View'
+                    }, inplace=True)
                     display_df['Tanggal'] = display_df['Tanggal'].dt.date
-                
-                st.dataframe(style_summary_table(display_df), use_container_width=True)
+                    display_df = display_df[['Tanggal', 'Username', 'Total Biaya Iklan', 'Total Penjualan', 'Total Profit', 'Total View']]
+
+                if styler is None and not display_df.empty:
+                    custom_formatters = {
+                        "Total Penjualan": format_rupiah, "Total Biaya Iklan": format_rupiah,
+                        "Total Profit": format_rupiah, "Total View": "{:,.0f}"
+                    }
+                    valid_formatters = {k: v for k, v in custom_formatters.items() if k in display_df.columns}
+                    styler = display_df.style.format(valid_formatters)
+                    if "Total Profit" in display_df.columns:
+                        styler = styler.applymap(style_profit_color, subset=['Total Profit'])
+
+                if styler:
+                    st.dataframe(styler, use_container_width=True)
+                elif not final_df.empty:
+                     st.info("Tidak ada aktivitas (biaya iklan atau penjualan) untuk agregasi dan filter yang dipilih.")
+
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
+        # --- AKHIR DARI BLOK KODE YANG DIPERBARUI ---
 
         elif menu == "📊 Ringkasan Performa":
             st.subheader("📊 Ringkasan Performa Total")
@@ -286,7 +336,6 @@ if not st.session_state.df_processed.empty:
             else:
                 st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
 
-        # --- PERUBAHAN: Logika Peringatan Diperbarui ---
         elif menu == "🚨 Peringatan Iklan":
             st.subheader("🚨 Peringatan Iklan Mendesak")
             st.warning("Akun di bawah ini menghabiskan biaya > Rp 5.000 dengan ROAS < 30 dalam satu interval. Pertimbangkan untuk menjeda iklan.")
@@ -307,7 +356,6 @@ if not st.session_state.df_processed.empty:
                     style_summary_table(warnings_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'ROAS', 'Saldo']]),
                     use_container_width=True
                 )
-        # --- AKHIR PERUBAHAN ---
 
     elif st.session_state.analysis_mode == "Ringkasan":
         all_studios = sorted(df_processed['Nama Studio'].unique())
@@ -353,4 +401,3 @@ if not st.session_state.df_processed.empty:
 
 else:
     st.info("Selamat datang! Silakan pilih mode analisis dan masukkan data Anda melalui sidebar untuk memulai.")
-
