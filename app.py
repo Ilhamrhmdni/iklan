@@ -1,7 +1,6 @@
 # app.py
 # Dashboard "Monitor Digital" Kinerja Studio Harian
-# Fitur: Input Manual (paste/upload), Google Sheets CSV, Simulasi
-# Auto-rotate 20/baris per 5 detik, warna status, fade-in, running text
+# Versi: pivot-wide aware + auto-detect kolom (sesuai data contoh Ilham)
 # By Albert
 
 import io
@@ -26,7 +25,6 @@ st.set_page_config(
 # =========================
 st.markdown("""
 <style>
-/* Kontainer penuh & sembunyikan header Streamlit default */
 .block-container {padding-top: 0rem; padding-bottom: 0rem; max-width: 100%;}
 header[data-testid="stHeader"] {display: none;}
 #MainMenu, footer {visibility: hidden;}
@@ -48,7 +46,7 @@ header[data-testid="stHeader"] {display: none;}
   background:#0ea5e91a; color:#7dd3fc; border:1px solid #0ea5e9;
 }
 
-/* Animasi lembut saat ganti halaman */
+/* Fade-in lembut saat ganti halaman */
 @keyframes fadeInSoft { from {opacity:0; transform: translateY(6px);} to {opacity:1; transform: translateY(0);} }
 .fade-in { animation: fadeInSoft 550ms ease-in-out; }
 
@@ -58,7 +56,7 @@ header[data-testid="stHeader"] {display: none;}
   width: 100%;
   font-size: 16px;
   color:#0f172a;                  /* teks gelap */
-  background:#ffffff;             /* latar tabel putih */
+  background:#ffffff;             /* latar putih */
 }
 .styled-table thead th,
 .styled-table td, .styled-table th {
@@ -84,7 +82,7 @@ header[data-testid="stHeader"] {display: none;}
 .pill-red    { background:#dc2626 !important; color:#ffffff !important; }
 .pill-yellow { background:#ca8a04 !important; color:#ffffff !important; }
 
-/* Marquee bawah (running text) */
+/* Marquee bawah */
 .marquee-wrap {
   position: fixed; left:0; right:0; bottom:0;
   background: #0f172a; color:#e2e8f0; border-top: 2px solid #0ea5e9;
@@ -116,18 +114,18 @@ AUTO_INTERVAL_MS = 5000  # 5 detik
 # =========================
 def parse_number(x):
     """
-    Baca angka format Indonesia (1.234.567,89) / English (1,234,567.89) / plain.
-    Return float (0 jika gagal).
+    Terima angka format ID (1.234.567,89) / EN (1,234,567.89) / plain.
+    Kembalikan float (0 jika gagal).
     """
     if pd.isna(x): return 0.0
     s = str(x).strip()
     if s == "": return 0.0
-    s = re.sub(r"[^\d,.\-]", "", s)  # buang simbol non angka
-    # Jika ada koma tunggal dan posisinya di kanan titik terakhir -> anggap ID
+    s = re.sub(r"[^\d,.\-]", "", s)
+    # Pola Indonesia: satu koma di kanan titik terakhir
     if s.count(",") == 1 and (s.rfind(",") > s.rfind(".")):
-        s = s.replace(".", "").replace(",", ".")  # titik ribuan -> buang, koma -> desimal
+        s = s.replace(".", "").replace(",", ".")
     else:
-        s = s.replace(",", "")  # anggap EN, buang koma ribuan
+        s = s.replace(",", "")
     try:
         return float(s)
     except:
@@ -171,7 +169,7 @@ def df_page_to_html(df_page: pd.DataFrame, start_idx: int) -> str:
     return "\n".join(html)
 
 # =========================
-# DATA SOURCES
+# DATA SOURCES (simulasi)
 # =========================
 def simulate_data(n=400, seed=42):
     rng = np.random.default_rng(seed)
@@ -199,37 +197,108 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Petunjuk Paste:**")
     st.markdown("- Copy dari Excel/Google Sheets **termasuk header**.\n"
-                "- Kolom wajib: `nama_studio`, `omset_hari_ini`.\n"
-                "- Opsional: `komisi`, `target_persen`, `status`.")
+                "- App ini otomatis memahami model pivot seperti contohmu.\n"
+                "- Minimal kolom: **STUDIO** dan salah satu dari **harian** atau blok tanggal.")
     st.caption("Format angka Indonesia/English otomatis terdeteksi.")
 
+# =========================
+# CORE: builder yang paham pivot lebar
+# =========================
 def build_from_df(raw: pd.DataFrame) -> pd.DataFrame:
-    # Mapping kolom fleksibel
-    cols = list(raw.columns)
-    c1, c2 = st.columns(2)
-    with c1:
-        k_nama  = st.selectbox("↗️ Kolom Nama Studio", cols, index=0)
-        k_omset = st.selectbox("↗️ Kolom Omset Hari Ini", cols, index=min(1, len(cols)-1))
-        k_komisi = st.selectbox("↗️ Kolom Komisi (opsional)", ["(Tidak ada)"]+cols, index=0)
-    with c2:
-        k_target = st.selectbox("↗️ Kolom Target % (opsional)", ["(Tidak ada)"]+cols, index=0)
-        k_status = st.selectbox("↗️ Kolom Status (opsional: Naik/Turun/Stabil)", ["(Tidak ada)"]+cols, index=0)
+    # Normalisasi nama kolom (untuk pencarian longgar)
+    orig_cols = list(raw.columns)
+    norm = {c: re.sub(r"\s+", " ", str(c)).strip().lower() for c in orig_cols}
 
+    def find_col(*keywords, contains=True):
+        """Cari kolom berdasar kata kunci (semua harus match). Return kolom asli atau None."""
+        keys = [k.lower() for k in keywords]
+        for c in orig_cols:
+            lc = norm[c]
+            ok = all(((k in lc) if contains else (k == lc)) for k in keys)
+            if ok:
+                return c
+        return None
+
+    # 1) Deteksi otomatis kolom ringkas
+    col_studio = find_col("studio") or find_col("nama", "studio")
+    col_harian = find_col("harian")
+    col_komisi_ringkas = find_col("komisi - iklan") or find_col("komisi", "iklan")
+    col_target = find_col("target komisi harian") or find_col("target", "harian")
+    col_status = find_col("status")
+
+    # 2) Jika 'harian' tidak ada, ambil blok TANGGAL TERAKHIR: cari kolom tanggal "dd/mm/yyyy"
+    date_cols = [c for c in orig_cols if re.search(r"\b\d{2}/\d{2}/\d{4}\b", str(c))]
+    last_date = None
+    if not col_harian and date_cols:
+        # ambil tanggal paling kanan (urut sesuai posisi muncul)
+        last_date = max(date_cols, key=lambda c: orig_cols.index(c))
+        idx = orig_cols.index(last_date)
+        # cari subkolom setelah tanggal tsb (SUM of OMSET, SUM of EST KOMISI)
+        subcols = orig_cols[idx: idx+8]  # ambil beberapa kolom kanan
+        col_omset_last = None
+        col_komisi_last = None
+        for sc in subcols:
+            if sc == last_date:
+                continue
+            lsc = norm[sc]
+            if ("sum of omset" in lsc or "omset" in lsc) and col_omset_last is None:
+                col_omset_last = sc
+            if ("sum of est komisi" in lsc or "komisi - iklan" in lsc or "komisi" in lsc) and col_komisi_last is None:
+                col_komisi_last = sc
+        if col_omset_last:
+            col_harian = col_omset_last
+        if not col_komisi_ringkas and col_komisi_last:
+            col_komisi_ringkas = col_komisi_last
+
+    # 3) Jika masih ada yang belum ketemu, sediakan mapping manual (fallback)
+    cols = list(raw.columns)
+    need_manual = (col_studio is None) or (col_harian is None)
+    if need_manual:
+        st.warning("Tidak semua kolom terdeteksi otomatis. Pilih mapping manual di bawah.")
+        c1, c2 = st.columns(2)
+        with c1:
+            col_studio = st.selectbox("↗️ Kolom Nama Studio", cols, index=0 if col_studio is None else cols.index(col_studio))
+            col_harian = st.selectbox(
+                "↗️ Kolom Omset Hari Ini (contoh: 'harian' atau 'SUM of OMSET' untuk tanggal terbaru)",
+                cols, index=min(1, len(cols)-1) if col_harian is None else cols.index(col_harian)
+            )
+        with c2:
+            col_komisi_ringkas = st.selectbox("↗️ Kolom Komisi (opsional)",
+                                              ["(Tidak ada)"]+cols,
+                                              index=0 if col_komisi_ringkas is None else 1+cols.index(col_komisi_ringkas))
+            col_target = st.selectbox("↗️ Kolom Target % (opsional)",
+                                      ["(Tidak ada)"]+cols,
+                                      index=0 if col_target is None else 1+cols.index(col_target))
+            col_status = st.selectbox("↗️ Kolom Status (opsional)",
+                                      ["(Tidak ada)"]+cols,
+                                      index=0 if col_status is None else 1+cols.index(col_status))
+    else:
+        st.info(
+            f"Deteksi otomatis:\n"
+            f"- Studio → **{col_studio}**\n"
+            f"- Omset harian → **{col_harian}**" +
+            (f"\n- Komisi → **{col_komisi_ringkas}**" if col_komisi_ringkas else "") +
+            (f"\n- Target % → **{col_target}**" if col_target else "") +
+            (f"\n- Status → **{col_status}**" if col_status else "") +
+            (f"\n- Tanggal dipakai: **{last_date}**" if last_date else "")
+        )
+
+    # 4) Bangun DataFrame sesuai skema app
     df = pd.DataFrame({
-        "nama_studio": raw[k_nama].astype(str),
-        "omset_hari_ini": [parse_number(v) for v in raw[k_omset]],
-        "komisi": [parse_number(v) for v in (raw[k_komisi] if k_komisi != "(Tidak ada)" else 0)],
-        "target_persen": [parse_number(v) for v in (raw[k_target] if k_target != "(Tidak ada)" else np.nan)],
-        "status": (raw[k_status] if k_status != "(Tidak ada)" else np.nan)
+        "nama_studio": raw[col_studio].astype(str),
+        "omset_hari_ini": [parse_number(v) for v in raw[col_harian]],
+        "komisi": [parse_number(v) for v in (raw[col_komisi_ringkas] if (col_komisi_ringkas and col_komisi_ringkas != "(Tidak ada)") else 0)],
+        "target_persen": [parse_number(v) for v in (raw[col_target] if (col_target and col_target != "(Tidak ada)") else np.nan)],
+        "status": (raw[col_status] if (col_status and col_status != "(Tidak ada)") else np.nan)
     })
 
-    # Status otomatis jika kosong
+    # 5) Status otomatis bila kosong
     if df["status"].isna().any():
         tp = df["target_persen"].fillna(100)
         auto = np.where(tp >= 100, "Naik", np.where(tp <= 90, "Turun", "Stabil"))
         df["status"] = df["status"].fillna(pd.Series(auto))
 
-    # Tipe data
+    # 6) Tipe data akhir + ranking
     df["omset_hari_ini"] = df["omset_hari_ini"].fillna(0).astype(float)
     df["komisi"] = df["komisi"].fillna(0).astype(float)
     df["target_persen"] = df["target_persen"].astype(float)
@@ -240,11 +309,14 @@ def build_from_df(raw: pd.DataFrame) -> pd.DataFrame:
         st.dataframe(df.head(10), use_container_width=True)
     return df
 
+# =========================
+# INPUT READERS
+# =========================
 def read_from_paste() -> pd.DataFrame | None:
     pasted = st.text_area(
-        "Paste data di sini (boleh dari Excel/Sheets):",
-        height=200,
-        placeholder="nama_studio\tomset_hari_ini\tkomisi\ttarget_persen\tstatus\nStudio A\t12.345.678\t1.234.567\t101\tNaik"
+        "Paste data di sini (boleh dari Excel/Sheets, termasuk header):",
+        height=240,
+        placeholder="area\tNAMA OPERATOR\tSTUDIO\t...\narea 1\tBUYUNG\tSTUDIO GRESIK 1\t..."
     )
     up = st.file_uploader("atau Upload CSV/XLSX", type=["csv", "xlsx"])
     raw = None
@@ -277,7 +349,7 @@ if src == "Paste/Upload":
         raw.columns = [str(c).strip() for c in raw.columns]
         df = build_from_df(raw)
     else:
-        df = simulate_data(400)  # tampil simulasi dulu biar layar tidak kosong
+        df = simulate_data(400)
 elif src == "Google Sheets (CSV)":
     raw = read_from_gsheet_csv()
     if raw is not None and not raw.empty:
@@ -293,11 +365,9 @@ else:
 # AUTO REFRESH / ROTATE
 # =========================
 try:
-    # Streamlit 1.25+ menyediakan autorefresh bawaan
-    from streamlit import autorefresh as st_autorefresh
+    from streamlit import autorefresh as st_autorefresh  # Streamlit 1.25+
 except Exception:
-    # fallback package eksternal (kalau kamu tambahkan di requirements)
-    from streamlit_autorefresh import st_autorefresh
+    from streamlit_autorefresh import st_autorefresh       # fallback eksternal
 
 refresh_counter = st_autorefresh(interval=AUTO_INTERVAL_MS, limit=None, key="auto_refresh_counter")
 num_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
@@ -338,7 +408,7 @@ with content_holder.container():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Bungkus tabel dengan panel putih agar kontras maksimal di Dark Mode
+    # Panel putih agar kontras maksimal di Dark Mode
     st.markdown('<div style="background:#ffffff; padding:8px; border-radius:12px;">', unsafe_allow_html=True)
     st.markdown(df_page_to_html(page_df, start_idx=start), unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -358,7 +428,3 @@ st.markdown(f"""
   <div class="marquee-inner">{running_text}</div>
 </div>
 """, unsafe_allow_html=True)
-
-# =========================
-# END
-# =========================
