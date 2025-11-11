@@ -1,403 +1,295 @@
-import streamlit as st
-import pandas as pd
+# app.py
+# Streamlit Dashboard "Monitor Digital" Kinerja 400 Studio — dengan INPUT MANUAL (copy–paste)
+# By Albert
+
+import re
+import math
 import numpy as np
-from io import StringIO
+import pandas as pd
+import streamlit as st
+from datetime import datetime
 
-# --- Konfigurasi Halaman ---
-st.set_page_config(page_title="📊 Analisis ROAS Shopee", layout="wide")
-st.title("📈 Analisis Data Iklan Shopee v6")
-st.markdown("Kini dengan dukungan Analisis Historis per 15 Menit!")
+# ---------------------------
+# PAGE CONFIG & STYLES
+# ---------------------------
+st.set_page_config(page_title="Dashboard Kinerja Studio Harian",
+                   layout="wide",
+                   page_icon="📊")
 
-# === Fungsi Bantuan (Helpers) ===
-def format_rupiah(x):
-    if pd.isna(x) or not isinstance(x, (int, float)): return "-"
-    x = float(x)
-    if abs(x) >= 1e6: return f"Rp {x/1e6:.1f} juta"
-    elif abs(x) >= 1e3: return f"Rp {x/1e3:.0f}rb"
-    else: return f"Rp {int(x)}"
+st.markdown("""
+<style>
+.block-container {padding-top: 0rem; padding-bottom: 0rem; max-width: 100%;}
+header[data-testid="stHeader"] {display: none;}
+.dashboard-header {
+  width: 100%; padding: 18px 24px; font-size: 40px; font-weight: 800;
+  background: linear-gradient(90deg, #0f172a, #111827); color: #f8fafc;
+  border-bottom: 2px solid #0ea5e9; display:flex; align-items:center; justify-content:space-between;
+}
+.badge {font-size:14px; padding:6px 10px; border-radius:999px; margin-left:6px;
+  background:#0ea5e91a; color:#7dd3fc; border:1px solid #0ea5e9;}
+@keyframes fadeInSoft {from {opacity:0; transform: translateY(6px);} to {opacity:1; transform: translateY(0);}}
+.fade-in {animation: fadeInSoft 550ms ease-in-out;}
+.styled-table {border-collapse: collapse; width: 100%; font-size: 16px;}
+.styled-table th, .styled-table td {padding: 12px 10px; border-bottom: 1px solid #e5e7eb; text-align: left;}
+.styled-table thead th {position: sticky; top: 0; background: #f8fafc; border-bottom: 2px solid #cbd5e1; z-index: 2; font-weight: 700;}
+.row-green { background-color: #dcfce7; }   /* Naik */
+.row-red   { background-color: #fee2e2; }   /* Turun */
+.row-yellow{ background-color: #fef9c3; }   /* Stabil */
+.pill {padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; display: inline-block;}
+.pill-green  { background:#16a34a; color:white; }
+.pill-red    { background:#dc2626; color:white; }
+.pill-yellow { background:#ca8a04; color:white; }
+.marquee-wrap {position: fixed; left:0; right:0; bottom:0; background:#0f172a; color:#e2e8f0; border-top: 2px solid #0ea5e9;
+  padding:10px 0; overflow:hidden; z-index:9999; font-size:18px; font-weight:700;}
+.marquee-inner {display:inline-block; white-space:nowrap; will-change: transform; animation: slideLeft 20s linear infinite;}
+@keyframes slideLeft {0% {transform: translateX(100%);} 100% {transform: translateX(-100%);}}
+#MainMenu, footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
-def style_profit_color(val):
-    color = 'black'
-    if isinstance(val, (int, float)):
-        if val > 0: color = 'green'
-        elif val < 0: color = 'red'
-    return f'color: {color}'
+# ---------------------------
+# CONFIG
+# ---------------------------
+PAGE_SIZE = 20
+AUTO_INTERVAL_MS = 5000  # rotate tiap 5 detik
 
-def style_summary_table(df_to_style):
-    formatters = {
-        "Penjualan": format_rupiah, "Biaya_Iklan": format_rupiah,
-        "Biaya_Iklan_PPN": format_rupiah, "Komisi": format_rupiah,
-        "Profit": format_rupiah, "ROAS": "{:.2f}", "View": "{:,.0f}",
-        "Saldo": format_rupiah
-    }
-    valid_formatters = {k: v for k, v in formatters.items() if k in df_to_style.columns}
-    styled = df_to_style.style.format(valid_formatters)
-    if "Profit" in df_to_style.columns:
-        styled = styled.applymap(style_profit_color, subset=['Profit'])
-    return styled
-
-# === Fungsi Parsing (Parser) ===
-
-# --- Parser untuk Data Historis (Format Baru) ---
-@st.cache_data
-def parse_historical_data(raw_data, commission_rate):
-    lines = raw_data.strip().split('\n')
-    header = lines[0].split('\t')
-    
+# ---------------------------
+# HELPER: number parsing (Indonesia/EN), status, rupiah
+# ---------------------------
+def parse_number(x):
+    """Terima string angka format ID (1.234.567,89) atau EN (1,234,567.89) atau plain.
+       Kembalikan float (atau 0 bila gagal)."""
+    if pd.isna(x): return 0.0
+    s = str(x).strip()
+    if s == "": return 0.0
+    # buang spasi & currency
+    s = re.sub(r"[^\d,.\-]", "", s)
+    # jika format ID (titik ribuan, koma desimal)
+    if s.count(",") == 1 and (s.rfind(",") > s.rfind(".")):
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        # anggap EN: buang koma ribuan
+        s = s.replace(",", "")
     try:
-        time_cols_start_index = 5
-        valid_time_headers_with_indices = []
-        for i, h in enumerate(header[time_cols_start_index:]):
-            if h.strip():
-                original_index = time_cols_start_index + i
-                valid_time_headers_with_indices.append((original_index, h.strip()))
+        return float(s)
+    except:
+        return 0.0
 
-        timestamp_strings = [h for _, h in valid_time_headers_with_indices]
-        if not timestamp_strings:
-            return pd.DataFrame()
-            
-        timestamps = pd.to_datetime(timestamp_strings)
-    except Exception as e:
-        st.error(f"Gagal mem-parsing header tanggal. Pastikan formatnya benar. Error: {e}")
-        return pd.DataFrame()
+def rupiah(x):
+    try:
+        x = int(round(float(x)))
+    except:
+        x = 0
+    return f"Rp{x:,}".replace(",", ".")
 
-    records = []
-    for line in lines[1:]:
-        parts = line.split('\t')
-        if len(parts) < time_cols_start_index + 1 or "TOTAL" in parts[0].upper():
-            continue
-            
-        nama_studio = parts[0]
-        username = parts[1]
+def status_to_class(s: str) -> str:
+    s = (s or "").lower()
+    if s == "naik": return "row-green"
+    if s == "turun": return "row-red"
+    return "row-yellow"
+
+def status_to_pill(s: str) -> str:
+    s_lower = (s or "").lower()
+    if s_lower == "naik":   return '<span class="pill pill-green">Naik</span>'
+    if s_lower == "turun":  return '<span class="pill pill-red">Turun</span>'
+    return '<span class="pill pill-yellow">Stabil</span>'
+
+# ---------------------------
+# DATA SOURCES
+# ---------------------------
+def simulate_data(n=400, seed=42):
+    rng = np.random.default_rng(seed)
+    names = [f"Studio {i:03d}" for i in range(1, n+1)]
+    omset = rng.integers(5_000_000, 250_000_000, size=n)
+    komisi = (omset * rng.uniform(0.05, 0.15, size=n)).astype(int)
+    target = np.round(rng.uniform(80, 125, size=n), 2)
+    status_choices = rng.choice(["Naik", "Stabil", "Turun"], size=n, p=[0.45, 0.30, 0.25])
+    df = pd.DataFrame({
+        "nama_studio": names,
+        "omset_hari_ini": omset,
+        "komisi": komisi,
+        "target_persen": target,
+        "status": status_choices
+    })
+    df["rank_omset"] = df["omset_hari_ini"].rank(ascending=False, method="min").astype(int)
+    return df.sort_values("nama_studio").reset_index(drop=True)
+
+def df_page_to_html(df_page: pd.DataFrame, start_idx: int) -> str:
+    headers = ["No", "Nama Studio", "Omset Hari Ini", "Komisi", "Target (%)", "Status"]
+    html = ['<table class="styled-table">', "<thead><tr>"]
+    html += [f"<th>{h}</th>" for h in headers]
+    html.append("</tr></thead><tbody>")
+    for i, row in enumerate(df_page.itertuples(index=False), start=start_idx+1):
+        row_class = status_to_class(row.status)
+        html.append(f'<tr class="{row_class}">')
+        html.append(f"<td>{i}</td>")
+        html.append(f"<td><strong>{row.nama_studio}</strong></td>")
+        html.append(f"<td>{rupiah(row.omset_hari_ini)}</td>")
+        html.append(f"<td>{rupiah(row.komisi)}</td>")
+        html.append(f"<td>{row.target_persen:.2f}%</td>")
+        html.append(f"<td>{status_to_pill(row.status)}</td>")
+        html.append("</tr>")
+    html.append("</tbody></table>")
+    return "\n".join(html)
+
+# ---------------------------
+# INPUT SECTION (MANUAL PASTE / UPLOAD)
+# ---------------------------
+with st.sidebar:
+    st.markdown("### Sumber Data")
+    src = st.radio("Pilih sumber:", ["Paste/Upload", "Google Sheets (CSV)", "Simulasi"], index=0)
+    st.markdown("---")
+    st.markdown("**Petunjuk Paste:**\n- Copy dari Excel/Google Sheets *termasuk header*.\n- Kolom wajib: `nama_studio`, `omset_hari_ini`, `komisi` (opsional), `target_persen` (opsional), `status` (opsional).")
+    st.caption("Format angka Indonesia/English otomatis terdeteksi.")
+
+def build_from_df(raw: pd.DataFrame) -> pd.DataFrame:
+    # siapkan mapping
+    cols = list(raw.columns)
+    c1, c2 = st.columns(2)
+    with c1:
+        k_nama = st.selectbox("↗️ Kolom Nama Studio", cols, index=0)
+        k_omset = st.selectbox("↗️ Kolom Omset Hari Ini", cols, index=min(1, len(cols)-1))
+        k_komisi = st.selectbox("↗️ Kolom Komisi (opsional)", ["(Tidak ada)"]+cols, index=0)
+    with c2:
+        k_target = st.selectbox("↗️ Kolom Target % (opsional)", ["(Tidak ada)"]+cols, index=0)
+        k_status = st.selectbox("↗️ Kolom Status (opsional: Naik/Turun/Stabil)", ["(Tidak ada)"]+cols, index=0)
+
+    df = pd.DataFrame({
+        "nama_studio": raw[k_nama].astype(str),
+        "omset_hari_ini": [parse_number(v) for v in raw[k_omset]],
+        "komisi": [parse_number(v) for v in (raw[k_komisi] if k_komisi != "(Tidak ada)" else 0)],
+        "target_persen": [parse_number(v) for v in (raw[k_target] if k_target != "(Tidak ada)" else np.nan)],
+        "status": (raw[k_status] if k_status != "(Tidak ada)" else np.nan)
+    })
+
+    # Jika komisi kosong tetapi ada persentase target/komisi di kolom lain, biarkan 0 (atau hitung sendiri sesuai kebutuhan)
+    # Status otomatis bila kosong:
+    if df["status"].isna().any():
+        tp = df["target_persen"].fillna(100)
+        auto = np.where(tp >= 100, "Naik", np.where(tp <= 90, "Turun", "Stabil"))
+        df["status"] = df["status"].fillna(pd.Series(auto))
+
+    # pastikan tipe
+    df["omset_hari_ini"] = df["omset_hari_ini"].fillna(0).astype(float)
+    df["komisi"] = df["komisi"].fillna(0).astype(float)
+    df["target_persen"] = df["target_persen"].astype(float)
+    df["rank_omset"] = df["omset_hari_ini"].rank(ascending=False, method="min").astype(int)
+
+    st.success(f"Data terbaca: {len(df)} baris.")
+    with st.expander("Preview 10 baris pertama"):
+        st.dataframe(df.head(10), use_container_width=True)
+    return df
+
+def read_from_paste() -> pd.DataFrame | None:
+    pasted = st.text_area("Paste data di sini (boleh dari Excel/Sheets):", height=200,
+                          placeholder="nama_studio\tomset_hari_ini\tkomisi\ttarget_persen\tstatus\nStudio A\t12.345.678\t1.234.567\t101\tNaik")
+    up = st.file_uploader("atau Upload CSV/XLSX", type=["csv", "xlsx"])
+    raw = None
+    if pasted.strip():
+        # deteksi delimiter: tab / ; / , 
+        sample = pasted.splitlines()
+        sep = "\t" if "\t" in pasted else (";" if ";" in pasted else ",")
         try:
-            saldo = float(parts[2].replace(".", "") or 0)
-        except (ValueError, IndexError):
-            saldo = 0
+            raw = pd.read_csv(pd.compat.StringIO(pasted), sep=sep)
+        except:
+            # fallback: python io
+            import io
+            raw = pd.read_csv(io.StringIO(pasted), sep=sep)
+    elif up is not None:
+        if up.name.lower().endswith(".csv"):
+            raw = pd.read_csv(up)
+        else:
+            raw = pd.read_excel(up)
+    return raw
 
-        for i, ts in enumerate(timestamps):
-            original_data_index = valid_time_headers_with_indices[i][0]
-            if original_data_index >= len(parts): continue
-
-            data_cell = parts[original_data_index].strip()
-            
-            try:
-                cell_parts = data_cell.split('|')
-                if len(cell_parts) < 4: continue
-
-                biaya_iklan = float(cell_parts[0].replace(".", "") or 0)
-                penjualan = float(cell_parts[1].replace(".", "") or 0)
-                view = int(cell_parts[3].replace(".", "") or 0)
-                komisi = penjualan * (commission_rate / 100)
-                profit = komisi - biaya_iklan
-                roas = penjualan / biaya_iklan if biaya_iklan > 0 else 0
-
-                records.append({
-                    "Timestamp": ts, "Nama Studio": nama_studio, "Username": username,
-                    "Saldo": saldo, "Biaya_Iklan": biaya_iklan, "Penjualan": penjualan, 
-                    "View": view, "Komisi": komisi, "Profit": profit, "ROAS": roas
-                })
-            except (ValueError, IndexError):
-                continue
-
-    return pd.DataFrame(records)
-
-# --- Parser untuk Data Ringkasan (Format Lama) ---
-@st.cache_data
-def parse_summary_data(raw_data, commission_rate):
-    lines = raw_data.strip().split('\n')
-    records = []
-    for line in lines:
-        if not line or any(k in line.upper() for k in ["NAMA STUDIO", "TOTAL"]):
-            continue
-        parts = line.split("\t")
-        if len(parts) < 5: continue
+def read_from_gsheet_csv() -> pd.DataFrame | None:
+    url = st.text_input("URL CSV (Publish to web)", st.secrets.get("GSHEET_CSV_URL", ""))
+    if url:
         try:
-            studio = parts[0].strip()
-            username = parts[1].strip()
-            penjualan = float(str(parts[3]).replace(".", "").replace(",", "") or 0)
-            biaya_iklan_sebelum_ppn = float(str(parts[4]).replace(".", "").replace(",", "") or 0)
-            biaya_iklan_dengan_ppn = biaya_iklan_sebelum_ppn * 1.11
-            roas = penjualan / biaya_iklan_dengan_ppn if biaya_iklan_dengan_ppn > 0 else 0
-            komisi = penjualan * (commission_rate / 100)
-            profit = komisi - biaya_iklan_dengan_ppn
-            records.append({
-                "Nama Studio": studio, "Username": username, "Penjualan": penjualan,
-                "Biaya_Iklan": biaya_iklan_dengan_ppn, "ROAS": roas,
-                "Komisi": komisi, "Profit": profit
-            })
-        except (ValueError, IndexError):
-            continue
-    return pd.DataFrame(records)
+            raw = pd.read_csv(url)
+            return raw
+        except Exception as e:
+            st.error(f"Gagal baca CSV: {e}")
+    return None
 
-# === Inisialisasi Session State ===
-if 'df_processed' not in st.session_state:
-    st.session_state.df_processed = pd.DataFrame()
-if 'analysis_mode' not in st.session_state:
-    st.session_state.analysis_mode = None
-if 'manual_interval' not in st.session_state:
-    st.session_state.manual_interval = None
-
-# === Sidebar & Input ===
-st.sidebar.title("⚙️ Pengaturan & Filter")
-analysis_mode = st.sidebar.selectbox(
-    "Pilih Mode Analisis",
-    ["Pilih Mode...", "Analisis Ringkasan (Total)", "Analisis Historis (Per Waktu)"]
-)
-
-raw_data = None
-if analysis_mode != "Pilih Mode...":
-    if analysis_mode == "Analisis Historis (Per Waktu)":
-        manual_interval = st.sidebar.selectbox(
-            "Pilih Interval Data File Anda",
-            ["15 Menit", "Per Jam", "Per Hari"]
-        )
-        st.session_state.manual_interval = manual_interval
-
-    commission_input = st.sidebar.number_input(
-        "Persentase Komisi (%)", min_value=0.0, max_value=100.0, value=5.0, step=0.1
-    )
-    st.sidebar.markdown("---")
-    
-    input_method = st.sidebar.radio("Pilih Cara Input", ["Upload File", "Paste Manual"])
-    
-    if input_method == "Upload File":
-        uploaded_file = st.sidebar.file_uploader("Upload file (.txt, .csv)", type=["txt", "csv"])
-        if uploaded_file:
-            raw_data = uploaded_file.read().decode("utf-8")
-    else: # Paste Manual
-        raw_data = st.sidebar.text_area("Paste data dari spreadsheet di sini", height=200)
-    
-    if raw_data:
-        if analysis_mode == "Analisis Historis (Per Waktu)":
-            df = parse_historical_data(raw_data, commission_input)
-            st.session_state.analysis_mode = "Historis"
-        else:
-            df = parse_summary_data(raw_data, commission_input)
-            st.session_state.analysis_mode = "Ringkasan"
-        
-        if not df.empty:
-            st.session_state.df_processed = df
-            st.sidebar.success(f"✅ Data berhasil diparsing!")
-        else:
-            st.sidebar.error("Gagal memproses data. Periksa format file.")
-
-# === Tampilan Utama ===
-if not st.session_state.df_processed.empty:
-    df_processed = st.session_state.df_processed
-    
-    if st.session_state.analysis_mode == "Historis":
-        st.sidebar.markdown("---")
-        # PERUBAHAN NAMA MENU
-        menu = st.sidebar.radio("Pilih Halaman", ["📈 Analisis Tren Waktu", "📄 Tabel Data Rinci", "📊 Ringkasan Performa", "🚨 Peringatan Iklan"])
-
-        min_date = df_processed['Timestamp'].min().date()
-        max_date = df_processed['Timestamp'].max().date()
-        
-        date_range = st.sidebar.date_input("Pilih Rentang Tanggal", value=(min_date, max_date), min_value=min_date, max_value=max_date)
-        
-        time_filtered_df = pd.DataFrame()
-        if len(date_range) == 2:
-            start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-            time_filtered_df = df_processed[(df_processed['Timestamp'] >= start_date) & (df_processed['Timestamp'] <= end_date + pd.Timedelta(days=1))]
-
-        st.header("Filter Data")
-        col1, col2 = st.columns(2)
-        with col1:
-            all_studios = sorted(time_filtered_df['Nama Studio'].unique())
-            selected_studios = st.multiselect("Filter Nama Studio", all_studios, default=all_studios)
-        with col2:
-            available_usernames = sorted(time_filtered_df[time_filtered_df['Nama Studio'].isin(selected_studios)]['Username'].unique()) if selected_studios else []
-            selected_usernames = st.multiselect("Filter Akun (Username)", available_usernames, default=available_usernames)
-
-        final_df = time_filtered_df[time_filtered_df['Nama Studio'].isin(selected_studios) & time_filtered_df['Username'].isin(selected_usernames)]
-        st.markdown("---")
-
-        agg_options = []
-        if st.session_state.manual_interval == "15 Menit": agg_options.extend(["15 Menit", "Per Jam", "Per Hari"])
-        elif st.session_state.manual_interval == "Per Jam": agg_options.extend(["Per Jam", "Per Hari"])
-        elif st.session_state.manual_interval == "Per Hari": agg_options.extend(["Per Hari"])
-
-        if menu == "📈 Analisis Tren Waktu":
-            st.subheader("📈 Analisis Tren Performa Berdasarkan Waktu")
-            if not final_df.empty and agg_options:
-                agg_option = st.selectbox("Agregasi Waktu", agg_options)
-                agg_map = {"15 Menit": "15T", "Per Jam": "H", "Per Hari": "D"}
-                df_agg = final_df.set_index('Timestamp')[['Penjualan', 'Biaya_Iklan', 'Profit']].resample(agg_map[agg_option]).sum().reset_index()
-                st.subheader(f"Tren Agregasi {agg_option}")
-                st.line_chart(df_agg.set_index('Timestamp'))
-                st.markdown("---")
-                st.subheader("🏆 Analisis Jam Emas (Golden Hours)")
-                hourly_summary = final_df.copy()
-                hourly_summary['Jam'] = hourly_summary['Timestamp'].dt.hour
-                golden_hours_df = hourly_summary.groupby('Jam')[['Penjualan', 'Profit']].sum()
-                st.bar_chart(golden_hours_df)
-            else:
-                st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
-        
-        # --- BLOK KODE YANG DIPERBARUI ---
-        elif menu == "📄 Tabel Data Rinci":
-            st.subheader("📄 Tabel Data Rinci")
-            st.info(
-                "Lihat data performa iklan Anda dalam format tabel. "
-                "Gunakan pilihan di bawah untuk meringkas data berdasarkan interval waktu yang berbeda, "
-                "seperti per jam atau per hari, untuk memudahkan analisis."
-            )
-
-            if not final_df.empty and agg_options:
-                agg_option_table = st.selectbox(
-                    "Ringkas Data Berdasarkan:",
-                    agg_options,
-                    help="Pilih bagaimana data akan dikelompokkan. '15 Menit' menampilkan data asli, 'Per Jam' menjumlahkan data setiap jam, dan 'Per Hari' menjumlahkan data harian."
-                )
-
-                display_df = pd.DataFrame()
-                styler = None
-
-                if agg_option_table == "15 Menit":
-                    st.markdown("##### 🕒 **Tabel Data per 15 Menit**")
-                    st.write(
-                        "Menampilkan setiap interval 15 menit di mana ada biaya iklan atau penjualan. "
-                        "Baris dengan biaya dan penjualan nol disembunyikan agar tabel lebih ringkas."
-                    )
-                    display_df = final_df[(final_df['Penjualan'] > 0) | (final_df['Biaya_Iklan'] > 0)]
-                    display_df = display_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'Profit', 'View', 'Saldo']]
-                    styler = style_summary_table(display_df)
-
-                elif agg_option_table == "Per Jam":
-                    st.markdown("##### ⏰ **Ringkasan Data per Jam**")
-                    st.write("Data dijumlahkan untuk setiap jam untuk melihat performa pada jam-jam tertentu.")
-                    df_hourly = final_df.set_index('Timestamp').groupby('Username').resample('H').sum(numeric_only=True).reset_index()
-                    display_df = df_hourly[(df_hourly['Penjualan'] > 0) | (df_hourly['Biaya_Iklan'] > 0)].copy()
-                    display_df.rename(columns={
-                        'Timestamp': 'Waktu (Mulai)', 'Biaya_Iklan': 'Total Biaya Iklan',
-                        'Penjualan': 'Total Penjualan', 'Profit': 'Total Profit', 'View': 'Total View'
-                    }, inplace=True)
-                    display_df['Waktu (Mulai)'] = display_df['Waktu (Mulai)'].dt.strftime('%Y-%m-%d %H:%M')
-                    display_df = display_df[['Waktu (Mulai)', 'Username', 'Total Biaya Iklan', 'Total Penjualan', 'Total Profit', 'Total View']]
-
-                elif agg_option_table == "Per Hari":
-                    st.markdown("##### 📅 **Ringkasan Data per Hari**")
-                    st.write("Data dijumlahkan untuk setiap hari untuk melihat performa harian secara keseluruhan.")
-                    df_daily = final_df.set_index('Timestamp').groupby('Username').resample('D').sum(numeric_only=True).reset_index()
-                    display_df = df_daily[(df_daily['Penjualan'] > 0) | (df_daily['Biaya_Iklan'] > 0)].copy()
-                    display_df.rename(columns={
-                        'Timestamp': 'Tanggal', 'Biaya_Iklan': 'Total Biaya Iklan',
-                        'Penjualan': 'Total Penjualan', 'Profit': 'Total Profit', 'View': 'Total View'
-                    }, inplace=True)
-                    display_df['Tanggal'] = display_df['Tanggal'].dt.date
-                    display_df = display_df[['Tanggal', 'Username', 'Total Biaya Iklan', 'Total Penjualan', 'Total Profit', 'Total View']]
-
-                if styler is None and not display_df.empty:
-                    custom_formatters = {
-                        "Total Penjualan": format_rupiah, "Total Biaya Iklan": format_rupiah,
-                        "Total Profit": format_rupiah, "Total View": "{:,.0f}"
-                    }
-                    valid_formatters = {k: v for k, v in custom_formatters.items() if k in display_df.columns}
-                    styler = display_df.style.format(valid_formatters)
-                    if "Total Profit" in display_df.columns:
-                        styler = styler.applymap(style_profit_color, subset=['Total Profit'])
-
-                if styler:
-                    st.dataframe(styler, use_container_width=True)
-                elif not final_df.empty:
-                     st.info("Tidak ada aktivitas (biaya iklan atau penjualan) untuk agregasi dan filter yang dipilih.")
-
-            else:
-                st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
-        # --- AKHIR DARI BLOK KODE YANG DIPERBARUI ---
-
-        elif menu == "📊 Ringkasan Performa":
-            st.subheader("📊 Ringkasan Performa Total")
-            st.info("Pada ringkasan ini, PPN 11% ditambahkan ke Total Biaya Iklan untuk menghitung Profit Bersih.")
-            if not final_df.empty:
-                total_penjualan = final_df['Penjualan'].sum()
-                total_biaya_asli = final_df['Biaya_Iklan'].sum()
-                total_biaya_ppn = total_biaya_asli * 1.11
-                total_komisi = final_df['Komisi'].sum()
-                total_profit_bersih = total_komisi - total_biaya_ppn
-                
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total Penjualan", format_rupiah(total_penjualan))
-                col2.metric("Total Biaya Iklan (+PPN 11%)", format_rupiah(total_biaya_ppn))
-                col3.metric(f"Total Komisi ({commission_input}%)", format_rupiah(total_komisi))
-                col4.metric("Profit Bersih (Setelah PPN)", format_rupiah(total_profit_bersih), delta_color=("inverse" if total_profit_bersih < 0 else "normal"))
-
-                st.markdown("---")
-                summary = final_df.groupby(['Nama Studio', 'Username']).agg(
-                    Penjualan=("Penjualan", "sum"), Biaya_Iklan=("Biaya_Iklan", "sum"),
-                    Komisi=("Komisi", "sum"), View=("View", "sum"), Saldo=("Saldo", "first")
-                ).reset_index()
-                
-                summary['Biaya_Iklan_PPN'] = summary['Biaya_Iklan'] * 1.11
-                summary['Profit'] = summary['Komisi'] - summary['Biaya_Iklan_PPN']
-                summary['ROAS'] = (summary['Penjualan'] / summary['Biaya_Iklan_PPN']).fillna(0)
-                
-                st.dataframe(style_summary_table(summary[['Nama Studio', 'Username', 'Penjualan', 'Biaya_Iklan_PPN', 'Profit', 'ROAS', 'View', 'Saldo']].rename(columns={"Biaya_Iklan_PPN": "Biaya_Iklan"})), use_container_width=True)
-            else:
-                st.warning("Tidak ada data untuk ditampilkan berdasarkan filter yang dipilih.")
-
-        elif menu == "🚨 Peringatan Iklan":
-            st.subheader("🚨 Peringatan Iklan Mendesak")
-            st.warning("Akun di bawah ini menghabiskan biaya > Rp 5.000 dengan ROAS < 30 dalam satu interval. Pertimbangkan untuk menjeda iklan.")
-            
-            cost_threshold = 5000
-            roas_threshold = 30
-            
-            warnings_df = final_df[
-                (final_df['Biaya_Iklan'] > cost_threshold) &
-                (final_df['ROAS'] < roas_threshold)
-            ].copy()
-
-            if warnings_df.empty:
-                st.success("✅ Tidak ada akun yang memenuhi kriteria peringatan.")
-            else:
-                warnings_df = warnings_df.sort_values(by="Biaya_Iklan", ascending=False)
-                st.dataframe(
-                    style_summary_table(warnings_df[['Timestamp', 'Username', 'Biaya_Iklan', 'Penjualan', 'ROAS', 'Saldo']]),
-                    use_container_width=True
-                )
-
-    elif st.session_state.analysis_mode == "Ringkasan":
-        all_studios = sorted(df_processed['Nama Studio'].unique())
-        selected_studios = st.sidebar.multiselect("Filter Nama Studio", all_studios, default=all_studios)
-        filtered_df = df_processed[df_processed['Nama Studio'].isin(selected_studios)] if selected_studios else pd.DataFrame()
-
-        if not filtered_df.empty:
-            menu_options = ["📊 Ringkasan Performa", "🏢 Ringkasan per Studio", "📥 Download Data"]
-            menu = st.sidebar.radio("Pilih Halaman", menu_options)
-
-            if menu == "📊 Ringkasan Performa":
-                st.subheader("📋 Ringkasan Performa Studio")
-                total_penjualan = filtered_df["Penjualan"].sum()
-                total_biaya = filtered_df["Biaya_Iklan"].sum()
-                profit_kotor = filtered_df["Komisi"].sum()
-                profit_bersih = filtered_df["Profit"].sum()
-                
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total Penjualan", format_rupiah(total_penjualan))
-                col2.metric("Total Biaya Iklan (+PPN 11%)", format_rupiah(total_biaya))
-                col3.metric(f"Profit Kotor (Komisi {commission_input}%)", format_rupiah(profit_kotor))
-                col4.metric("Profit Bersih", format_rupiah(profit_bersih), delta_color=("inverse" if profit_bersih < 0 else "normal"))
-                
-                st.markdown("---")
-                st.subheader("Data Lengkap")
-                st.dataframe(style_summary_table(filtered_df), use_container_width=True)
-
-            elif menu == "🏢 Ringkasan per Studio":
-                st.subheader("🏢 Ringkasan Performa per Studio")
-                studio_summary = filtered_df.groupby("Nama Studio").agg(
-                    Penjualan=("Penjualan", "sum"), Biaya_Iklan=("Biaya_Iklan", "sum"),
-                    Profit=("Profit", "sum"), Jumlah_Akun=("Username", "count")
-                ).reset_index()
-                studio_summary['ROAS'] = (studio_summary['Penjualan'] / studio_summary['Biaya_Iklan']).fillna(0)
-                st.dataframe(style_summary_table(studio_summary), use_container_width=True)
-
-            elif menu == "📥 Download Data":
-                st.subheader("📥 Download Data yang Telah Diproses")
-                csv_data = filtered_df.to_csv(index=False).encode('utf-8')
-                st.download_button("⬇️ Download CSV", data=csv_data, file_name="analisis_roas_ringkasan.csv", mime="text/csv")
-        else:
-            st.warning("Tidak ada data untuk ditampilkan. Silakan pilih setidaknya satu studio di sidebar.")
-
+# ---------------------------
+# LOAD DATA sesuai sumber
+# ---------------------------
+if src == "Paste/Upload":
+    raw = read_from_paste()
+    if raw is not None and not raw.empty:
+        raw.columns = [str(c).strip() for c in raw.columns]
+        df = build_from_df(raw)
+    else:
+        df = simulate_data(400)  # tampilkan simulasi dulu biar layar tidak kosong
+elif src == "Google Sheets (CSV)":
+    raw = read_from_gsheet_csv()
+    if raw is not None and not raw.empty:
+        raw.columns = [str(c).strip() for c in raw.columns]
+        df = build_from_df(raw)
+    else:
+        st.info("Masukkan URL CSV dari menu **File → Publish to the web → CSV**.")
+        df = simulate_data(400)
 else:
-    st.info("Selamat datang! Silakan pilih mode analisis dan masukkan data Anda melalui sidebar untuk memulai.")
+    df = simulate_data(400)
+
+# ---------------------------
+# AUTO REFRESH & PAGING
+# ---------------------------
+try:
+    from streamlit import autorefresh as st_autorefresh
+except Exception:
+    from streamlit_autorefresh import st_autorefresh  # eksternal, jika tersedia
+
+refresh_counter = st_autorefresh(interval=AUTO_INTERVAL_MS, limit=None, key="auto_refresh_counter")
+num_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
+page_idx = 0 if refresh_counter is None else (refresh_counter % num_pages)
+start = page_idx * PAGE_SIZE
+end = start + PAGE_SIZE
+page_df = df.iloc[start:end].copy()
+
+# ---------------------------
+# HEADER
+# ---------------------------
+now = datetime.now()
+meta_left = f"Halaman {page_idx+1}/{num_pages}"
+meta_right = f"{len(df)} studio • {now.strftime('%H:%M:%S, %d %b %Y')}"
+st.markdown(f"""
+<div class="dashboard-header">
+  <div>📊 DASHBOARD KINERJA STUDIO HARIAN
+    <span class="badge">{meta_left}</span>
+  </div>
+  <div><span class="badge">{meta_right}</span></div>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------------------------
+# MAIN CONTENT
+# ---------------------------
+content_holder = st.empty()
+with content_holder.container():
+    st.markdown('<div class="fade-in">', unsafe_allow_html=True)
+    k1, k2, k3, k4 = st.columns(4)
+    with k1: st.metric("Total Studio", f"{len(df)}")
+    with k2: st.metric("Total Omset", rupiah(df["omset_hari_ini"].sum()))
+    with k3: st.metric("Rata-rata Omset", rupiah(df["omset_hari_ini"].mean()))
+    with k4:
+        naik_pct = (df["status"].str.lower() == "naik").mean()*100
+        st.metric("Persentase Naik", f"{naik_pct:.1f}%")
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(df_page_to_html(page_df, start_idx=start), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------------------------
+# RUNNING TEXT
+# ---------------------------
+best_row = df.iloc[df["omset_hari_ini"].astype(float).idxmax()]
+running_text = (
+    f"Studio terbaik hari ini: {best_row['nama_studio']} (Omset: {rupiah(best_row['omset_hari_ini'])})   •   "
+    f"Update terakhir: {now.strftime('%H:%M:%S, %d %b %Y')}"
+)
+st.markdown(f"""
+<div class="marquee-wrap">
+  <div class="marquee-inner">{running_text}</div>
+</div>
+""", unsafe_allow_html=True)
