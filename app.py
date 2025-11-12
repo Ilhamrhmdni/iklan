@@ -1,5 +1,5 @@
 # app.py
-# Dashboard "Monitor Digital" Kinerja Studio Harian — Mode Akumulasi (min..max tanggal)
+# Dashboard "Monitor Digital" Kinerja Studio — Mode Akumulasi & Per Tanggal
 # Sumber: transaksi baris (OWNER, STUDIO, USERNAME, OMSET, EST KOMISI, TANGGAL, NAMA OPERATOR, area)
 # Sidebar: panel 📚 Database (RAW) tanpa limit
 # By Albert
@@ -13,7 +13,7 @@ import streamlit as st
 # =========================
 # PAGE CONFIG
 # =========================
-st.set_page_config(page_title="Dashboard Kinerja Studio (Akumulasi)", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Dashboard Kinerja Studio", layout="wide", page_icon="📊")
 
 # =========================
 # STYLES
@@ -95,10 +95,12 @@ def status_to_pill(s):
     if s == "turun": return '<span class="pill pill-red">Turun</span>'
     return '<span class="pill pill-yellow">Stabil</span>'
 
-def df_page_to_html(df_page, start_idx):
-    headers = ["No","Nama Studio","Total Omset","Total Komisi","Target (%)","Status"]
+def df_page_to_html(df_page, start_idx, use_total_labels=True):
+    heads = ["No","Nama Studio","Total Omset" if use_total_labels else "Omset Hari Ini",
+             "Total Komisi" if use_total_labels else "Komisi",
+             "Target (%)","Status"]
     html = ['<table class="styled-table">',"<thead><tr>"]
-    html += [f"<th>{h}</th>" for h in headers]
+    html += [f"<th>{h}</th>" for h in heads]
     html.append("</tr></thead><tbody>")
     for i,row in enumerate(df_page.itertuples(index=False), start=start_idx+1):
         html.append(f'<tr class="{status_to_class(row.status)}">')
@@ -113,12 +115,14 @@ def df_page_to_html(df_page, start_idx):
     return "\n".join(html)
 
 # =========================
-# SIDEBAR — petunjuk
+# SIDEBAR — petunjuk + MODE
 # =========================
 with st.sidebar:
     st.markdown("### Sumber Data")
     st.markdown("Paste/Upload **transaksi baris**:")
     st.code("OWNER | STUDIO | USERNAME | OMSET | EST KOMISI | TANGGAL | NAMA OPERATOR | area", language="text")
+    st.markdown("---")
+    mode = st.radio("Mode Tampilan", ["Akumulasi penuh","Per tanggal"], index=0)
 
 # =========================
 # INPUT
@@ -151,8 +155,7 @@ if raw is None or raw.empty:
 lu = {c: re.sub(r"\s+"," ",str(c)).strip().lower() for c in raw.columns}
 def pick(*keys):
     for c in raw.columns:
-        if all(k in lu[c] for k in keys):
-            return c
+        if all(k in lu[c] for k in keys): return c
     return None
 
 c_owner   = pick("owner")
@@ -179,18 +182,21 @@ valid_dates = df_tx["TANGGAL"].dropna()
 if valid_dates.empty:
     st.error("Kolom TANGGAL tidak terbaca. Pastikan ada kolom 'TANGGAL'.")
     st.stop()
+min_d_all, max_d_all = valid_dates.min(), valid_dates.max()
 
 # =========================
 # SIDEBAR — Database (RAW) tanpa limit + Filter
 # =========================
 with st.sidebar:
-    st.markdown("---")
     st.markdown("### 📚 Database (RAW)")
     db_view = st.radio("Tampilan", ["Full (tanpa filter)","Sesuai filter"], index=0)
     st.markdown("### Filter")
     f_area  = st.multiselect("Area", sorted(df_tx["area"].dropna().unique()))
     f_owner = st.multiselect("Owner", sorted(df_tx["OWNER"].dropna().unique()))
     f_op    = st.multiselect("Operator", sorted(df_tx["NAMA OPERATOR"].dropna().unique()))
+    # untuk mode "Per tanggal" tampilkan date picker
+    if mode == "Per tanggal":
+        pick_date = st.date_input("Tanggal (Per tanggal):", value=max_d_all, min_value=min_d_all, max_value=max_d_all)
 
 # Terapkan filter (untuk dashboard & opsi Database)
 mask = pd.Series(True, index=df_tx.index)
@@ -207,40 +213,72 @@ with st.sidebar:
                        file_name="database_raw.csv", mime="text/csv")
 
 # =========================
-# RENTANG TANGGAL OTOMATIS (AKUMULASI)
+# HITUNGAN UTAMA (sesuai MODE)
 # =========================
-min_d, max_d = df_tx_filtered["TANGGAL"].min(), df_tx_filtered["TANGGAL"].max()
-day_count = (max_d - min_d).days + 1  # jumlah hari inklusif (misal 1..11 = 11 hari)
+if mode == "Akumulasi penuh":
+    # Range otomotis min..max (setelah filter)
+    min_d, max_d = df_tx_filtered["TANGGAL"].min(), df_tx_filtered["TANGGAL"].max()
+    day_count = (max_d - min_d).days + 1
 
-# =========================
-# AGREGASI TOTAL (min..max) PER STUDIO
-# =========================
-range_df = df_tx_filtered[(df_tx_filtered["TANGGAL"] >= min_d) & (df_tx_filtered["TANGGAL"] <= max_d)]
-agg_total = range_df.groupby("STUDIO", as_index=False).agg(
-    omset_hari_ini=("OMSET","sum"),
-    komisi=("EST KOMISI","sum"),
-).rename(columns={"STUDIO":"nama_studio"})
+    range_df = df_tx_filtered[(df_tx_filtered["TANGGAL"] >= min_d) & (df_tx_filtered["TANGGAL"] <= max_d)]
+    agg_total = range_df.groupby("STUDIO", as_index=False).agg(
+        omset_hari_ini=("OMSET","sum"),
+        komisi=("EST KOMISI","sum"),
+    ).rename(columns={"STUDIO":"nama_studio"})
 
-# =========================
-# TARGET_PERSEN & STATUS
-#   - rata_hari = total_komisi / jumlah_hari (min..max)
-#   - ref_avg7  = rata2 7 hari terakhir sebelum max_d
-#   - target%   = (rata_hari / ref_avg7) * 100
-# =========================
-hist_before_end = df_tx_filtered[df_tx_filtered["TANGGAL"] <= max_d].copy()
-ref = (
-    hist_before_end.sort_values("TANGGAL")
-    .groupby("STUDIO")["EST KOMISI"]
-    .apply(lambda s: s.tail(7).mean() if len(s) else np.nan)
-    .reset_index().rename(columns={"STUDIO":"nama_studio","EST KOMISI":"komisi_avg7"})
-)
-df = agg_total.merge(ref, on="nama_studio", how="left")
-df["avg_per_day"] = np.where(day_count > 0, df["komisi"] / day_count, np.nan)
-df["target_persen"] = np.where(df["komisi_avg7"] > 0, (df["avg_per_day"] / df["komisi_avg7"]) * 100.0, 100.0)
-tp = df["target_persen"].fillna(100)
-df["status"] = np.where(tp >= 100, "Naik", np.where(tp <= 90, "Turun", "Stabil"))
-df["rank_omset"] = df["omset_hari_ini"].rank(ascending=False, method="min").astype(int)
-df = df.drop(columns=["komisi_avg7","avg_per_day"]).sort_values("nama_studio").reset_index(drop=True)
+    # target% = (avg komisi per hari di range) / (avg 7 hari terakhir sebelum max_d)
+    hist_before_end = df_tx_filtered[df_tx_filtered["TANGGAL"] <= max_d].copy()
+    ref = (
+        hist_before_end.sort_values("TANGGAL")
+        .groupby("STUDIO")["EST KOMISI"]
+        .apply(lambda s: s.tail(7).mean() if len(s) else np.nan)
+        .reset_index().rename(columns={"STUDIO":"nama_studio","EST KOMISI":"komisi_avg7"})
+    )
+    df = agg_total.merge(ref, on="nama_studio", how="left")
+    df["avg_per_day"] = np.where(day_count > 0, df["komisi"] / day_count, np.nan)
+    df["target_persen"] = np.where(df["komisi_avg7"] > 0, (df["avg_per_day"] / df["komisi_avg7"]) * 100.0, 100.0)
+    tp = df["target_persen"].fillna(100)
+    df["status"] = np.where(tp >= 100, "Naik", np.where(tp <= 90, "Turun", "Stabil"))
+    df["rank_omset"] = df["omset_hari_ini"].rank(ascending=False, method="min").astype(int)
+    df = df.drop(columns=["komisi_avg7","avg_per_day"]).sort_values("nama_studio").reset_index(drop=True)
+
+    header_title = "📊 DASHBOARD KINERJA STUDIO (AKUMULASI)"
+    header_meta = f"{len(df)} studio • {min_d.strftime('%d %b %Y')} — {max_d.strftime('%d %b %Y')} • {datetime.now().strftime('%H:%M:%S')}"
+    use_total_labels = True
+    running_text = (
+        f"Mode Akumulasi • Range: {min_d.strftime('%d %b')}–{max_d.strftime('%d %b %Y')}"
+    )
+
+else:  # Per tanggal
+    # gunakan pick_date dari sidebar (sudah dibatasi min/max)
+    min_d, max_d = None, None  # tidak dipakai di header
+    day_label = pick_date.strftime('%d %b %Y')
+
+    today_df = df_tx_filtered[df_tx_filtered["TANGGAL"] == pick_date]
+    agg_today = today_df.groupby("STUDIO", as_index=False).agg(
+        omset_hari_ini=("OMSET", "sum"),
+        komisi=("EST KOMISI", "sum"),
+    ).rename(columns={"STUDIO":"nama_studio"})
+
+    # target% = komisi hari itu / rata2 komisi 7 hari sebelum hari itu
+    hist_until = df_tx_filtered[df_tx_filtered["TANGGAL"] < pick_date].copy()
+    ref = (
+        hist_until.sort_values("TANGGAL")
+        .groupby("STUDIO")["EST KOMISI"]
+        .apply(lambda s: s.tail(7).mean() if len(s) else np.nan)
+        .reset_index().rename(columns={"STUDIO":"nama_studio","EST KOMISI":"komisi_avg7"})
+    )
+    df = agg_today.merge(ref, on="nama_studio", how="left")
+    df["target_persen"] = np.where(df["komisi_avg7"] > 0, (df["komisi"] / df["komisi_avg7"]) * 100.0, 100.0)
+    tp = df["target_persen"].fillna(100)
+    df["status"] = np.where(tp >= 100, "Naik", np.where(tp <= 90, "Turun", "Stabil"))
+    df["rank_omset"] = df["omset_hari_ini"].rank(ascending=False, method="min").astype(int)
+    df = df.sort_values("nama_studio").reset_index(drop=True)
+
+    header_title = "📊 DASHBOARD KINERJA STUDIO (PER TANGGAL)"
+    header_meta = f"{len(df)} studio • {day_label} • {datetime.now().strftime('%H:%M:%S')}"
+    use_total_labels = False
+    running_text = f"Mode Per Tanggal • {day_label}"
 
 # =========================
 # AUTO REFRESH / ROTATE
@@ -258,15 +296,12 @@ page_df = df.iloc[start:end].copy()
 # =========================
 # HEADER
 # =========================
-now = datetime.now()
-meta_left  = f"Halaman {page_idx+1}/{num_pages}"
-meta_right = f"{len(df)} studio • {min_d.strftime('%d %b %Y')} — {max_d.strftime('%d %b %Y')} • {now.strftime('%H:%M:%S')}"
 st.markdown(f"""
 <div class="dashboard-header">
-  <div>📊 DASHBOARD KINERJA STUDIO (AKUMULASI)
-    <span class="badge">{meta_left}</span>
+  <div>{header_title}
+    <span class="badge">Halaman {page_idx+1}/{num_pages}</span>
   </div>
-  <div><span class="badge">{meta_right}</span></div>
+  <div><span class="badge">{header_meta}</span></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -279,15 +314,15 @@ with content_holder.container():
 
     k1,k2,k3,k4 = st.columns(4)
     with k1: st.metric("Total Studio", f"{len(df)}")
-    with k2: st.metric("Total Omset (Range)", rupiah(df["omset_hari_ini"].sum()))
-    with k3: st.metric("Total Komisi (Range)", rupiah(df["komisi"].sum()))
+    with k2: st.metric("Total Omset", rupiah(df["omset_hari_ini"].sum()))
+    with k3: st.metric("Total Komisi", rupiah(df["komisi"].sum()))
     with k4:
         naik_pct = (df["status"].str.lower()=="naik").mean()*100
         st.metric("Persentase Naik", f"{naik_pct:.1f}%")
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div style="background:#fff; padding:8px; border-radius:12px;">', unsafe_allow_html=True)
-    st.markdown(df_page_to_html(page_df, start_idx=start), unsafe_allow_html=True)
+    st.markdown(df_page_to_html(page_df, start_idx=start, use_total_labels=use_total_labels), unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -297,7 +332,7 @@ with content_holder.container():
 # =========================
 if not df.empty:
     best_row = df.iloc[df["omset_hari_ini"].astype(float).idxmax()]
-    running = f"Studio terbaik (akumulasi): {best_row['nama_studio']} (Omset: {rupiah(best_row['omset_hari_ini'])}) • Range: {min_d.strftime('%d %b')}–{max_d.strftime('%d %b %Y')} • Update: {now.strftime('%H:%M:%S')}"
+    running = f"{running_text} • Studio terbaik: {best_row['nama_studio']} (Omset: {rupiah(best_row['omset_hari_ini'])}) • Update: {datetime.now().strftime('%H:%M:%S')}"
 else:
-    running = f"Tidak ada data • Update: {now.strftime('%H:%M:%S, %d %b %Y')}"
+    running = f"{running_text} • Tidak ada data"
 st.markdown(f'<div class="marquee-wrap"><div class="marquee-inner">{running}</div></div>', unsafe_allow_html=True)
