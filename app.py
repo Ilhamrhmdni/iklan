@@ -1,6 +1,7 @@
 # app.py
 # Dashboard "Monitor Digital" Kinerja Studio Harian
-# Sumber utama: database transaksi baris (OWNER, STUDIO, USERNAME, OMSET, EST KOMISI, TANGGAL, NAMA OPERATOR, area)
+# Sumber: database transaksi baris (OWNER, STUDIO, USERNAME, OMSET, EST KOMISI, TANGGAL, NAMA OPERATOR, area)
+# Sidebar: kolom khusus "Database (RAW)" menampilkan seluruh data tanpa limit
 # By Albert
 
 import io
@@ -113,7 +114,7 @@ def parse_number(x):
         return 0.0
 
 def parse_date_any(x):
-    """Coba parse berbagai format tanggal."""
+    """Coba berbagai format tanggal."""
     if pd.isna(x): return None
     s = str(x).strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
@@ -164,11 +165,11 @@ def df_page_to_html(df_page: pd.DataFrame, start_idx: int) -> str:
     return "\n".join(html)
 
 # =========================
-# SIDEBAR (Input)
+# SIDEBAR — petunjuk singkat
 # =========================
 with st.sidebar:
     st.markdown("### Sumber Data")
-    st.markdown("Mode ini menerima **transaksi baris**:")
+    st.markdown("Paste/Upload **transaksi baris**:")
     st.code("OWNER | STUDIO | USERNAME | OMSET | EST KOMISI | TANGGAL | NAMA OPERATOR | area", language="text")
 
 # =========================
@@ -201,9 +202,8 @@ if raw is None or raw.empty:
     st.stop()
 
 # =========================
-# NORMALISASI & FILTER
+# NORMALISASI & DATAFRAME TERTIKET
 # =========================
-# Pemetaan kolom longgar (tanpa minta user pilih)
 lu = {c: re.sub(r"\s+", " ", str(c)).strip().lower() for c in raw.columns}
 
 def pick(*keys):
@@ -221,20 +221,32 @@ c_tanggal = pick("tanggal")
 c_op      = pick("nama", "operator") or pick("operator")
 c_area    = pick("area")
 
-# Build dataframe typed
+# Raw typed table (dipakai untuk Database/RAW di sidebar)
 df_tx = pd.DataFrame({
-    "owner": raw[c_owner] if c_owner else "",
-    "studio": raw[c_studio].astype(str),
-    "username": raw[c_user] if c_user else "",
-    "omset": [parse_number(v) for v in raw[c_omset]] if c_omset else 0,
-    "komisi": [parse_number(v) for v in raw[c_estkom]] if c_estkom else 0,
-    "tanggal": raw[c_tanggal].apply(parse_date_any) if c_tanggal else None,
-    "operator": raw[c_op] if c_op else "",
+    "OWNER": raw[c_owner] if c_owner else "",
+    "STUDIO": raw[c_studio].astype(str),
+    "USERNAME": raw[c_user] if c_user else "",
+    "OMSET": [parse_number(v) for v in raw[c_omset]] if c_omset else 0,
+    "EST KOMISI": [parse_number(v) for v in raw[c_estkom]] if c_estkom else 0,
+    "TANGGAL": raw[c_tanggal].apply(parse_date_any) if c_tanggal else None,
+    "NAMA OPERATOR": raw[c_op] if c_op else "",
     "area": raw[c_area] if c_area else "",
 })
 
-# Tanggal min/max untuk UI
-valid_dates = df_tx["tanggal"].dropna()
+# =========================
+# SIDEBAR — DATABASE (RAW) TANPA LIMIT
+# =========================
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("### 📚 Database (RAW)")
+
+    # Pilih tampilan data yang ingin dilihat di panel Database
+    db_view = st.radio("Tampilan", ["Full (tanpa filter)", "Sesuai filter"], index=0, horizontal=False)
+
+# =========================
+# FILTER (untuk dashboard & opsional untuk panel Database)
+# =========================
+valid_dates = df_tx["TANGGAL"].dropna()
 if valid_dates.empty:
     st.error("Kolom TANGGAL tidak terbaca. Pastikan ada kolom 'TANGGAL' dengan format tanggal.")
     st.stop()
@@ -242,39 +254,48 @@ if valid_dates.empty:
 min_d, max_d = valid_dates.min(), valid_dates.max()
 
 with st.sidebar:
-    st.markdown("---")
-    st.markdown("### Filter Data")
+    st.markdown("### Filter")
     f_area = st.multiselect("Area", sorted(df_tx["area"].dropna().unique()), help="Kosongkan jika ingin semua.")
-    f_owner = st.multiselect("Owner", sorted(df_tx["owner"].dropna().unique()))
-    f_op = st.multiselect("Operator", sorted(df_tx["operator"].dropna().unique()))
-    pick_date = st.date_input("Pilih tanggal (untuk dashboard hari ini):", value=max_d, min_value=min_d, max_value=max_d)
+    f_owner = st.multiselect("Owner", sorted(df_tx["OWNER"].dropna().unique()))
+    f_op = st.multiselect("Operator", sorted(df_tx["NAMA OPERATOR"].dropna().unique()))
+    pick_date = st.date_input("Tanggal dashboard (hari ini):", value=max_d, min_value=min_d, max_value=max_d)
 
-# Terapkan filter (selain tanggal)
+# Mask filter (untuk dashboard, dan untuk panel Database bila dipilih 'Sesuai filter')
 mask = pd.Series(True, index=df_tx.index)
 if f_area:  mask &= df_tx["area"].isin(f_area)
-if f_owner: mask &= df_tx["owner"].isin(f_owner)
-if f_op:    mask &= df_tx["operator"].isin(f_op)
-df_tx_f = df_tx[mask].copy()
+if f_owner: mask &= df_tx["OWNER"].isin(f_owner)
+if f_op:    mask &= df_tx["NAMA OPERATOR"].isin(f_op)
+
+df_tx_filtered = df_tx[mask].copy()
+
+# ==== Tampilkan DATABASE (RAW) di SIDEBAR — TANPA LIMIT ====
+with st.sidebar:
+    show_df = df_tx if db_view == "Full (tanpa filter)" else df_tx_filtered
+    # data ditampilkan utuh, virtualization aktif untuk efisiensi
+    st.dataframe(show_df, use_container_width=True, height=900)
+    # tombol download CSV sesuai tampilan
+    csv_bytes = show_df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CSV (Database RAW)", data=csv_bytes, file_name="database_raw.csv", mime="text/csv")
 
 # =========================
-# AGREGASI HARI INI (per STUDIO)
+# AGREGASI HARI INI (per STUDIO) untuk DASHBOARD
 # =========================
-today_df = df_tx_f[df_tx_f["tanggal"] == pick_date]
-agg_today = today_df.groupby("studio", as_index=False).agg(
-    omset_hari_ini=("omset", "sum"),
-    komisi=("komisi", "sum"),
+today_df = df_tx_filtered[df_tx_filtered["TANGGAL"] == pick_date]
+agg_today = today_df.groupby("STUDIO", as_index=False).agg(
+    omset_hari_ini=("OMSET", "sum"),
+    komisi=("EST KOMISI", "sum"),
 )
-agg_today.rename(columns={"studio": "nama_studio"}, inplace=True)
+agg_today.rename(columns={"STUDIO": "nama_studio"}, inplace=True)
 
 # =========================
 # TARGET_PERSEN vs rata-rata 7 hari sebelumnya per studio
 # =========================
-hist_until = df_tx_f[df_tx_f["tanggal"] < pick_date].copy()
+hist_until = df_tx_filtered[df_tx_filtered["TANGGAL"] < pick_date].copy()
 ref = (
-    hist_until.sort_values("tanggal")
-    .groupby("studio")["komisi"]
+    hist_until.sort_values("TANGGAL")
+    .groupby("STUDIO")["EST KOMISI"]
     .apply(lambda s: s.tail(7).mean() if len(s) else np.nan)
-    .reset_index().rename(columns={"studio": "nama_studio", "komisi": "komisi_avg7"})
+    .reset_index().rename(columns={"STUDIO": "nama_studio", "EST KOMISI": "komisi_avg7"})
 )
 df = agg_today.merge(ref, on="nama_studio", how="left")
 df["target_persen"] = np.where(df["komisi_avg7"] > 0, (df["komisi"] / df["komisi_avg7"]) * 100.0, 100.0)
@@ -321,6 +342,9 @@ st.markdown(f"""
 # =========================
 # MAIN CONTENT
 # =========================
+def main_table_html(df_show: pd.DataFrame, start_idx: int) -> str:
+    return df_page_to_html(df_show, start_idx=start_idx)
+
 content_holder = st.empty()
 with content_holder.container():
     st.markdown('<div class="fade-in">', unsafe_allow_html=True)
@@ -335,9 +359,8 @@ with content_holder.container():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Panel putih untuk kontras
     st.markdown('<div style="background:#ffffff; padding:8px; border-radius:12px;">', unsafe_allow_html=True)
-    st.markdown(df_page_to_html(page_df, start_idx=start), unsafe_allow_html=True)
+    st.markdown(main_table_html(page_df, start_idx=start), unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
