@@ -1,26 +1,28 @@
-# app.py
-# Dashboard "Monitor Digital" Kinerja Studio
-# Fitur: Mode Akumulasi/Per Tanggal, Group by Studio/Operator/Area, Alert tren "Turun" 3 hari,
-#        Database RAW tanpa limit, Search, Autoplay (rotate), Export CSV, Supabase optional.
+# app.py — Dashboard Kinerja Studio (Opsi A + Filter Tanggal Range)
+# By Albert
 
-import io, re, math, time
-from datetime import datetime, timedelta
+import io, re, math
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 # =========================
-# PAGE CONFIG
+# PAGE CONFIG (Opsi A)
 # =========================
-st.set_page_config(page_title="Dashboard Kinerja Studio", layout="wide", page_icon="📊")
+st.set_page_config(
+    page_title="Dashboard Kinerja Studio",
+    layout="wide",
+    page_icon="📊",
+    initial_sidebar_state="expanded",  # Sidebar selalu terbuka
+)
 
 # =========================
-# STYLES
+# STYLES (header TIDAK disembunyikan)
 # =========================
 st.markdown("""
 <style>
 .block-container {padding-top:0rem; padding-bottom:0rem; max-width:100%;}
-header[data-testid="stHeader"] {display:none;}
 #MainMenu, footer {visibility:hidden;}
 .dashboard-header{width:100%; padding:18px 24px; font-size:40px; font-weight:800;
   background:linear-gradient(90deg,#0f172a,#111827); color:#f8fafc; border-bottom:2px solid #0ea5e9;
@@ -113,7 +115,7 @@ def df_page_to_html(df_page, start_idx, label_total=True, unit_label="Nama Unit"
 with st.sidebar:
     st.markdown("### Sumber Data")
     data_src = st.radio("Pilih sumber", ["Paste/Upload", "Supabase"], index=0, horizontal=True)
-    st.caption("Format kolom wajib: OWNER, STUDIO, USERNAME, OMSET, EST KOMISI, TANGGAL, NAMA OPERATOR, area")
+    st.caption("Kolom wajib: OWNER, STUDIO, USERNAME, OMSET, EST KOMISI, TANGGAL, NAMA OPERATOR, area")
 
 # =========================
 # LOAD DATA
@@ -137,7 +139,7 @@ if data_src == "Paste/Upload":
     elif uploaded is not None:
         raw = pd.read_csv(uploaded) if uploaded.name.lower().endswith(".csv") else pd.read_excel(uploaded)
 
-elif data_src == "Supabase":
+else:  # Supabase (opsional)
     with st.sidebar:
         st.markdown("---")
         st.markdown("#### Supabase")
@@ -146,12 +148,10 @@ elif data_src == "Supabase":
         fetch_btn = st.button("🎯 Ambil data")
     if fetch_btn:
         try:
-            from supabase import create_client, Client
+            from supabase import create_client
             url = st.secrets["SUPABASE_URL"]
             key = st.secrets["SUPABASE_KEY"]
-            supa: Client = create_client(url, key)
-
-            # fetch all (pagination)
+            supa = create_client(url, key)
             chunk, start = 2000, 0
             frames = []
             while True:
@@ -161,10 +161,8 @@ elif data_src == "Supabase":
                 frames.append(pd.DataFrame(data))
                 if len(data) < chunk: break
                 start += chunk
-            if frames:
-                raw = pd.concat(frames, ignore_index=True)
-            else:
-                st.warning("Tidak ada data dari Supabase.")
+            if frames: raw = pd.concat(frames, ignore_index=True)
+            else: st.warning("Tidak ada data dari Supabase.")
         except Exception as e:
             st.error(f"Gagal konek Supabase: {e}")
 
@@ -208,7 +206,7 @@ if valid_dates.empty:
 min_d_all, max_d_all = valid_dates.min(), valid_dates.max()
 
 # =========================
-# SIDEBAR — Database RAW + Mode/Group/Filter + Kontrol Tampilan
+# SIDEBAR — Mode/Group + Database + FILTER (termasuk TANGGAL RANGE)
 # =========================
 with st.sidebar:
     st.markdown("---")
@@ -220,25 +218,39 @@ with st.sidebar:
     db_view = st.radio("Tampilan Database", ["Full (tanpa filter)", "Sesuai filter"], index=0)
 
     st.markdown("### Filter")
+    # ➊ Filter Tanggal (Range) — baru
+    date_range = st.date_input(
+        "Rentang tanggal (filter)",
+        value=(min_d_all, max_d_all),
+        min_value=min_d_all,
+        max_value=max_d_all
+    )
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        f_start, f_end = date_range
+    else:
+        f_start, f_end = min_d_all, max_d_all
+
     f_area  = st.multiselect("Area", sorted(df_tx["area"].dropna().unique()))
     f_owner = st.multiselect("Owner", sorted(df_tx["OWNER"].dropna().unique()))
     f_op    = st.multiselect("Operator", sorted(df_tx["NAMA OPERATOR"].dropna().unique()))
+
+    # ➋ Untuk mode per tanggal: pilih 1 tanggal (default = akhir range)
     if mode == "Per tanggal":
-        pick_date = st.date_input("Tanggal (Per tanggal)", value=max_d_all, min_value=min_d_all, max_value=max_d_all)
+        pick_date = st.date_input("Tanggal (Per tanggal)", value=f_end, min_value=f_start, max_value=f_end)
 
     st.markdown("### Tampilan")
     PAGE_SIZE = st.number_input("Baris per halaman", min_value=10, max_value=500, value=20, step=5)
     AUTO_INTERVAL_MS = st.number_input("Durasi rotasi (ms)", min_value=1000, max_value=60000, value=5000, step=500)
     q = st.text_input("Cari unit… (opsional)", "")
 
-# Terapkan filter (untuk dashboard & opsi Database)
-mask = pd.Series(True, index=df_tx.index)
+# Terapkan filter (Area/Owner/Operator + Tanggal Range) ke dataset utama
+mask = (df_tx["TANGGAL"] >= f_start) & (df_tx["TANGGAL"] <= f_end)
 if f_area:  mask &= df_tx["area"].isin(f_area)
 if f_owner: mask &= df_tx["OWNER"].isin(f_owner)
 if f_op:    mask &= df_tx["NAMA OPERATOR"].isin(f_op)
 df_tx_f = df_tx[mask].copy()
 
-# Panel Database (RAW) — no limit
+# Panel Database (RAW) — tanpa limit
 with st.sidebar:
     show_df = df_tx if db_view == "Full (tanpa filter)" else df_tx_f
     st.dataframe(show_df, use_container_width=True, height=800)
@@ -246,9 +258,12 @@ with st.sidebar:
                        file_name="database_raw.csv", mime="text/csv")
 
 # =========================
-# DAILY SERIES per GROUP (untuk semua fitur downstream)
+# DAILY SERIES per GROUP
 # =========================
-# Tentukan key & label
+if df_tx_f.empty:
+    st.warning("Tidak ada data dalam rentang dan filter yang dipilih.")
+    st.stop()
+
 if group_choice == "Studio":
     gkey, glabel = "STUDIO", "Nama Studio"
 elif group_choice == "Operator":
@@ -256,7 +271,6 @@ elif group_choice == "Operator":
 else:
     gkey, glabel = "area", "Area"
 
-# Seri harian per group
 daily = (
     df_tx_f.dropna(subset=["TANGGAL"])
     .groupby([gkey, "TANGGAL"], as_index=False)
@@ -276,10 +290,9 @@ if mode == "Akumulasi penuh":
         komisi=("komisi","sum"),
     )
 
-    # referensi: avg komisi 7 hari terakhir sebelum max_d
+    # referensi: avg komisi 7 hari terakhir sebelum max_d (stabil: butuh ≥3 data)
     tmp = (daily[daily["TANGGAL"] <= max_d]
-           .groupby(gkey)["komisi"]
-           .apply(lambda s: s.tail(7)))
+           .groupby(gkey)["komisi"].apply(lambda s: s.tail(7)))
     ref = (tmp.groupby(level=0).agg(['mean','count'])
               .reset_index().rename(columns={gkey:"nama_unit", 'mean':'komisi_avg7','count':'ref_n'}))
 
@@ -298,15 +311,13 @@ if mode == "Akumulasi penuh":
     running_text = f"Mode Akumulasi • Range {min_d.strftime('%d %b')}–{max_d.strftime('%d %b %Y')} • Group by {group_choice}"
 
 else:  # Per tanggal
-    # Pastikan date ada di daily
-    if "pick_date" not in locals():
-        pick_date = max_d_all
-    day_label = pick_date.strftime('%d %b %Y')
+    day_label = pick_date.strftime('%d %b %Y') if "pick_date" in locals() else f_end.strftime('%d %b %Y')
+    pick = pick_date if "pick_date" in locals() else f_end
 
-    today = daily[daily["TANGGAL"]==pick_date]
+    today = daily[daily["TANGGAL"]==pick]
     totals = today.groupby(gkey, as_index=False).agg(omset_hari_ini=("omset","sum"), komisi=("komisi","sum"))
 
-    hist = daily[daily["TANGGAL"]<pick_date]
+    hist = daily[daily["TANGGAL"]<pick]
     tmp = hist.groupby(gkey)["komisi"].apply(lambda s: s.tail(7))
     ref = (tmp.groupby(level=0).agg(['mean','count'])
               .reset_index().rename(columns={gkey:"nama_unit", 'mean':'komisi_avg7','count':'ref_n'}))
@@ -329,13 +340,13 @@ if q:
     df = df[df["nama_unit"].str.contains(q, case=False, na=False)].reset_index(drop=True)
 
 # =========================
-# ALERT: Turun 3 hari berturut-turut (berdasarkan komisi harian)
+# ALERT: Turun 3 hari berturut-turut (komisi harian)
 # =========================
 def find_three_down_streak(daily_df: pd.DataFrame, key: str):
     alerts = []
     for unit, grp in daily_df.groupby(key):
         s = grp.sort_values("TANGGAL")["komisi"].values
-        if len(s) < 4:  # butuh minimal 4 titik untuk 3 penurunan berturut
+        if len(s) < 4:  # minimal 4 titik untuk 3 penurunan
             continue
         a,b,c,d = s[-4], s[-3], s[-2], s[-1]
         if (b < a) and (c < b) and (d < c):
@@ -383,7 +394,6 @@ st.markdown(f'<div class="leader-chips">{chips}</div>', unsafe_allow_html=True)
 # =========================
 if alerts:
     with st.expander("⚠️ Alert: Tren Turun 3 hari berturut-turut", expanded=False):
-        # tampilkan top 10 alert
         show = alerts[:10]
         rows = []
         for unit, a, d, pct in show:
@@ -411,7 +421,7 @@ with content_holder.container():
     st.markdown("<br>", unsafe_allow_html=True)
 
     st.markdown('<div style="background:#fff; padding:8px; border-radius:12px;">', unsafe_allow_html=True)
-    st.markdown(df_page_to_html(page_df, start_idx=start, label_total=label_total, unit_label=glabel.replace("Nama ","Nama ")), unsafe_allow_html=True)
+    st.markdown(df_page_to_html(page_df, start_idx=start, label_total=(mode=="Akumulasi penuh"), unit_label=glabel), unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Export hasil agregasi
