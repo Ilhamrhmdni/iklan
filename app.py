@@ -8,15 +8,24 @@ from datetime import datetime
 @st.cache_data
 def load_data(uploaded_file=None):
     if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
+        df = pd.read_csv(uploaded_file, sep='\t')  # Asumsi tab-separated, sesuaikan jika perlu
     else:
         try:
-            df = pd.read_csv('data_studio.csv')
+            df = pd.read_csv('data_studio.csv', sep='\t')  # Asumsi tab-separated
         except FileNotFoundError:
             st.error("File 'data_studio.csv' tidak ditemukan. Silakan upload file CSV menggunakan uploader di bawah.")
             return pd.DataFrame()  # Return empty DataFrame if file not found
+    
+    # Rename kolom untuk konsistensi (EST KOMISI -> EST_KOMISI, area -> AREA)
+    df = df.rename(columns={'EST KOMISI': 'EST_KOMISI', 'area': 'AREA'})
+    
+    # Parse kolom numerik (OMSET dan EST_KOMISI menggunakan titik sebagai pemisah ribuan)
+    df['OMSET'] = df['OMSET'].astype(str).str.replace('.', '', regex=False).astype(float)
+    df['EST_KOMISI'] = df['EST_KOMISI'].astype(str).str.replace('.', '', regex=False).astype(float)
+    
     # Pastikan kolom TANGGAL dalam format datetime
     df['TANGGAL'] = pd.to_datetime(df['TANGGAL'], errors='coerce')
+    
     return df
 
 # Fungsi untuk format angka ribuan
@@ -26,13 +35,13 @@ def format_number(num):
 # Fungsi untuk styling tabel berdasarkan area
 def style_table(df):
     def color_area(val):
-        if val == 1:
+        if val == 'area 1':
             color = 'background-color: lightblue'
-        elif val == 2:
+        elif val == 'area 2':
             color = 'background-color: lightgreen'
-        elif val == 3:
+        elif val == 'area 3':
             color = 'background-color: lightcoral'
-        elif val == 4:
+        elif val == 'area 4':
             color = 'background-color: lightsalmon'
         else:
             color = ''
@@ -43,7 +52,7 @@ def style_table(df):
 st.title("📊 DASHBOARD OMSET & KOMISI STUDIO SHOPEE LIVE AFFILIATE")
 
 # File uploader untuk CSV
-uploaded_file = st.sidebar.file_uploader("Upload file CSV (data_studio.csv)", type=["csv"])
+uploaded_file = st.sidebar.file_uploader("Upload file CSV (data_studio.csv)", type=["csv", "txt"])
 
 # Load data
 df = load_data(uploaded_file)
@@ -66,7 +75,7 @@ with col2:
 # Filter
 st.sidebar.header("Filter Data")
 area_filter = st.sidebar.multiselect("Pilih Area", options=df['AREA'].unique(), default=df['AREA'].unique())
-operator_filter = st.sidebar.multiselect("Pilih Operator", options=df['NAMA_OPERATOR'].unique(), default=df['NAMA_OPERATOR'].unique())
+operator_filter = st.sidebar.multiselect("Pilih Operator", options=df['NAMA OPERATOR'].unique(), default=df['NAMA OPERATOR'].unique())
 studio_filter = st.sidebar.multiselect("Pilih Studio", options=df['STUDIO'].unique(), default=df['STUDIO'].unique())
 tanggal_start = st.sidebar.date_input("Tanggal Mulai", value=df['TANGGAL'].min().date())
 tanggal_end = st.sidebar.date_input("Tanggal Akhir", value=df['TANGGAL'].max().date())
@@ -77,7 +86,7 @@ search_query = st.sidebar.text_input("Cari Username atau Studio", "")
 # Terapkan filter
 filtered_df = df[
     (df['AREA'].isin(area_filter)) &
-    (df['NAMA_OPERATOR'].isin(operator_filter)) &
+    (df['NAMA OPERATOR'].isin(operator_filter)) &
     (df['STUDIO'].isin(studio_filter)) &
     (df['TANGGAL'].dt.date >= tanggal_start) &
     (df['TANGGAL'].dt.date <= tanggal_end)
