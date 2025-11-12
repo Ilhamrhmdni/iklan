@@ -1,14 +1,11 @@
 # app.py
-# Dashboard "Monitor Digital" Kinerja Studio Harian
-# Sumber: database transaksi baris (OWNER, STUDIO, USERNAME, OMSET, EST KOMISI, TANGGAL, NAMA OPERATOR, area)
-# Sidebar: kolom khusus "Database (RAW)" menampilkan seluruh data tanpa limit
+# Dashboard "Monitor Digital" Kinerja Studio Harian — Mode Akumulasi (min..max tanggal)
+# Sumber: transaksi baris (OWNER, STUDIO, USERNAME, OMSET, EST KOMISI, TANGGAL, NAMA OPERATOR, area)
+# Sidebar: panel 📚 Database (RAW) tanpa limit
 # By Albert
 
-import io
-import re
-import math
+import io, re, math
 from datetime import datetime, timedelta
-
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -16,76 +13,38 @@ import streamlit as st
 # =========================
 # PAGE CONFIG
 # =========================
-st.set_page_config(
-    page_title="Dashboard Kinerja Studio Harian",
-    layout="wide",
-    page_icon="📊",
-)
+st.set_page_config(page_title="Dashboard Kinerja Studio (Akumulasi)", layout="wide", page_icon="📊")
 
 # =========================
-# GLOBAL STYLES (Dark Mode friendly)
+# STYLES
 # =========================
 st.markdown("""
 <style>
-.block-container {padding-top: 0rem; padding-bottom: 0rem; max-width: 100%;}
-header[data-testid="stHeader"] {display: none;}
-#MainMenu, footer {visibility: hidden;}
-
-/* Header besar */
-.dashboard-header {
-  width: 100%;
-  padding: 18px 24px;
-  font-size: 40px;
-  font-weight: 800;
-  letter-spacing: .3px;
-  background: linear-gradient(90deg, #0f172a, #111827);
-  color: #f8fafc;
-  border-bottom: 2px solid #0ea5e9;
-  display:flex; align-items:center; justify-content:space-between;
-}
-.badge {
-  font-size:14px; padding:6px 10px; border-radius:999px; margin-left:6px;
-  background:#0ea5e91a; color:#7dd3fc; border:1px solid #0ea5e9;
-}
-
-/* Animasi lembut saat ganti halaman */
-@keyframes fadeInSoft { from {opacity:0; transform: translateY(6px);} to {opacity:1; transform: translateY(0);} }
-.fade-in { animation: fadeInSoft 550ms ease-in-out; }
-
-/* Tabel kontras aman di Dark Mode */
-.styled-table { border-collapse: collapse; width: 100%; font-size: 16px; color:#0f172a; background:#ffffff; }
-.styled-table thead th, .styled-table td, .styled-table th { color:#0f172a !important; padding:12px 10px; border-bottom:1px solid #e5e7eb; text-align:left; }
-.styled-table thead th { background:#f8fafc !important; border-bottom:2px solid #cbd5e1; position: sticky; top: 0; z-index: 2; font-weight: 700; }
-
-/* Warna status */
-.row-green  { background:#dcfce7 !important; }  /* Naik */
-.row-red    { background:#fee2e2 !important; }  /* Turun */
-.row-yellow { background:#fef9c3 !important; }  /* Stabil */
-
-/* Pill */
-.pill { padding:4px 10px; border-radius:999px; font-weight:700; font-size:13px; display:inline-block; }
-.pill-green  { background:#16a34a !important; color:#ffffff !important; }
-.pill-red    { background:#dc2626 !important; color:#ffffff !important; }
-.pill-yellow { background:#ca8a04 !important; color:#ffffff !important; }
-
-/* Marquee bawah */
-.marquee-wrap {
-  position: fixed; left:0; right:0; bottom:0;
-  background: #0f172a; color:#e2e8f0; border-top: 2px solid #0ea5e9;
-  padding: 10px 0; overflow: hidden; z-index: 9999;
-  font-size: 18px; font-weight: 700;
-}
-.marquee-inner {
-  display: inline-block; white-space: nowrap; will-change: transform;
-  animation: slideLeft 20s linear infinite;
-}
-@keyframes slideLeft { 0% { transform: translateX(100%);} 100% { transform: translateX(-100%);} }
-
-/* Font rapi */
-html, body, [data-testid="stAppViewContainer"] * {
-  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
-  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-}
+.block-container {padding-top:0rem; padding-bottom:0rem; max-width:100%;}
+header[data-testid="stHeader"] {display:none;}
+#MainMenu, footer {visibility:hidden;}
+.dashboard-header{width:100%; padding:18px 24px; font-size:40px; font-weight:800;
+  background:linear-gradient(90deg,#0f172a,#111827); color:#f8fafc; border-bottom:2px solid #0ea5e9;
+  display:flex; align-items:center; justify-content:space-between;}
+.badge{font-size:14px; padding:6px 10px; border-radius:999px; margin-left:6px; background:#0ea5e91a;
+  color:#7dd3fc; border:1px solid #0ea5e9;}
+@keyframes fadeInSoft{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+.fade-in{animation:fadeInSoft 550ms ease-in-out;}
+.styled-table{border-collapse:collapse; width:100%; font-size:16px; color:#0f172a; background:#fff;}
+.styled-table thead th, .styled-table td, .styled-table th{color:#0f172a !important; padding:12px 10px; border-bottom:1px solid #e5e7eb; text-align:left;}
+.styled-table thead th{background:#f8fafc !important; border-bottom:2px solid #cbd5e1; position:sticky; top:0; z-index:2; font-weight:700;}
+.row-green{background:#dcfce7 !important;} .row-red{background:#fee2e2 !important;} .row-yellow{background:#fef9c3 !important;}
+.pill{padding:4px 10px; border-radius:999px; font-weight:700; font-size:13px; display:inline-block;}
+.pill-green{background:#16a34a !important; color:#fff !important;}
+.pill-red{background:#dc2626 !important; color:#fff !important;}
+.pill-yellow{background:#ca8a04 !important; color:#fff !important;}
+.marquee-wrap{position:fixed; left:0; right:0; bottom:0; background:#0f172a; color:#e2e8f0; border-top:2px solid #0ea5e9;
+  padding:10px 0; overflow:hidden; z-index:9999; font-size:18px; font-weight:700;}
+.marquee-inner{display:inline-block; white-space:nowrap; will-change:transform; animation:slideLeft 20s linear infinite;}
+@keyframes slideLeft{0%{transform:translateX(100%);}100%{transform:translateX(-100%);}}
+html, body, [data-testid="stAppViewContainer"] *{
+  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+  font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -93,67 +52,56 @@ html, body, [data-testid="stAppViewContainer"] * {
 # CONST
 # =========================
 PAGE_SIZE = 20
-AUTO_INTERVAL_MS = 5000  # 5 detik
+AUTO_INTERVAL_MS = 5000  # 5 detik rotate
 
 # =========================
 # HELPERS
 # =========================
 def parse_number(x):
-    """Angka format ID/EN/plain -> float."""
     if pd.isna(x): return 0.0
     s = str(x).strip()
     if s == "": return 0.0
     s = re.sub(r"[^\d,.\-]", "", s)
     if s.count(",") == 1 and (s.rfind(",") > s.rfind(".")):
-        s = s.replace(".", "").replace(",", ".")  # Indonesia
+        s = s.replace(".", "").replace(",", ".")  # ID
     else:
-        s = s.replace(",", "")  # English/plain
-    try:
-        return float(s)
-    except:
-        return 0.0
+        s = s.replace(",", "")  # EN/plain
+    try: return float(s)
+    except: return 0.0
 
 def parse_date_any(x):
-    """Coba berbagai format tanggal."""
     if pd.isna(x): return None
     s = str(x).strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except:
-            pass
-    try:
-        return pd.to_datetime(s, errors="coerce").date()
-    except:
-        return None
+    for fmt in ("%Y-%m-%d","%d/%m/%Y","%m/%d/%Y","%d-%m-%Y"):
+        try: return datetime.strptime(s, fmt).date()
+        except: pass
+    try: return pd.to_datetime(s, errors="coerce").date()
+    except: return None
 
 def rupiah(x):
-    try:
-        x = int(round(float(x)))
-    except:
-        x = 0
+    try: x = int(round(float(x)))
+    except: x = 0
     return f"Rp{x:,}".replace(",", ".")
 
-def status_to_class(s: str) -> str:
+def status_to_class(s):
     s = (s or "").lower()
     if s == "naik": return "row-green"
     if s == "turun": return "row-red"
     return "row-yellow"
 
-def status_to_pill(s: str) -> str:
-    s_lower = (s or "").lower()
-    if s_lower == "naik":   return '<span class="pill pill-green">Naik</span>'
-    if s_lower == "turun":  return '<span class="pill pill-red">Turun</span>'
+def status_to_pill(s):
+    s = (s or "").lower()
+    if s == "naik": return '<span class="pill pill-green">Naik</span>'
+    if s == "turun": return '<span class="pill pill-red">Turun</span>'
     return '<span class="pill pill-yellow">Stabil</span>'
 
-def df_page_to_html(df_page: pd.DataFrame, start_idx: int) -> str:
-    headers = ["No", "Nama Studio", "Omset Hari Ini", "Komisi", "Target (%)", "Status"]
-    html = ['<table class="styled-table">', "<thead><tr>"]
+def df_page_to_html(df_page, start_idx):
+    headers = ["No","Nama Studio","Total Omset","Total Komisi","Target (%)","Status"]
+    html = ['<table class="styled-table">',"<thead><tr>"]
     html += [f"<th>{h}</th>" for h in headers]
     html.append("</tr></thead><tbody>")
-    for i, row in enumerate(df_page.itertuples(index=False), start=start_idx+1):
-        row_class = status_to_class(row.status)
-        html.append(f'<tr class="{row_class}">')
+    for i,row in enumerate(df_page.itertuples(index=False), start=start_idx+1):
+        html.append(f'<tr class="{status_to_class(row.status)}">')
         html.append(f"<td>{i}</td>")
         html.append(f"<td><strong>{row.nama_studio}</strong></td>")
         html.append(f"<td>{rupiah(row.omset_hari_ini)}</td>")
@@ -165,7 +113,7 @@ def df_page_to_html(df_page: pd.DataFrame, start_idx: int) -> str:
     return "\n".join(html)
 
 # =========================
-# SIDEBAR — petunjuk singkat
+# SIDEBAR — petunjuk
 # =========================
 with st.sidebar:
     st.markdown("### Sumber Data")
@@ -173,39 +121,34 @@ with st.sidebar:
     st.code("OWNER | STUDIO | USERNAME | OMSET | EST KOMISI | TANGGAL | NAMA OPERATOR | area", language="text")
 
 # =========================
-# INPUT (Paste/Upload)
+# INPUT
 # =========================
 pasted = st.text_area(
     "Paste data transaksi (termasuk header):",
-    height=260,
+    height=240,
     placeholder="OWNER\tSTUDIO\tUSERNAME\tOMSET\tEST KOMISI\tTANGGAL\tNAMA OPERATOR\tarea\nCMDTIM\tSTUDIO PUSAT 102\tanekagamis77\t892.009\t73.420\t2025-11-01\tVALEN\tarea 1",
 )
-uploaded = st.file_uploader("atau Upload CSV/XLSX", type=["csv", "xlsx"])
+uploaded = st.file_uploader("atau Upload CSV/XLSX", type=["csv","xlsx"])
 
-def _detect_sep(text: str) -> str:
+def _detect_sep(text):
     if "\t" in text: return "\t"
     if ";" in text: return ";"
     return ","
 
 raw = None
 if pasted.strip():
-    sep = _detect_sep(pasted)
-    raw = pd.read_csv(io.StringIO(pasted), sep=sep)
+    raw = pd.read_csv(io.StringIO(pasted), sep=_detect_sep(pasted))
 elif uploaded is not None:
-    if uploaded.name.lower().endswith(".csv"):
-        raw = pd.read_csv(uploaded)
-    else:
-        raw = pd.read_excel(uploaded)
+    raw = pd.read_csv(uploaded) if uploaded.name.lower().endswith(".csv") else pd.read_excel(uploaded)
 
 if raw is None or raw.empty:
     st.info("Belum ada data. Silakan paste atau upload.")
     st.stop()
 
 # =========================
-# NORMALISASI & DATAFRAME TERTIKET
+# NORMALISASI RAW
 # =========================
-lu = {c: re.sub(r"\s+", " ", str(c)).strip().lower() for c in raw.columns}
-
+lu = {c: re.sub(r"\s+"," ",str(c)).strip().lower() for c in raw.columns}
 def pick(*keys):
     for c in raw.columns:
         if all(k in lu[c] for k in keys):
@@ -216,12 +159,11 @@ c_owner   = pick("owner")
 c_studio  = pick("studio")
 c_user    = pick("username")
 c_omset   = pick("omset")
-c_estkom  = pick("est", "komisi") or pick("komisi")
+c_estkom  = pick("est","komisi") or pick("komisi")
 c_tanggal = pick("tanggal")
-c_op      = pick("nama", "operator") or pick("operator")
+c_op      = pick("nama","operator") or pick("operator")
 c_area    = pick("area")
 
-# Raw typed table (dipakai untuk Database/RAW di sidebar)
 df_tx = pd.DataFrame({
     "OWNER": raw[c_owner] if c_owner else "",
     "STUDIO": raw[c_studio].astype(str),
@@ -233,106 +175,95 @@ df_tx = pd.DataFrame({
     "area": raw[c_area] if c_area else "",
 })
 
+valid_dates = df_tx["TANGGAL"].dropna()
+if valid_dates.empty:
+    st.error("Kolom TANGGAL tidak terbaca. Pastikan ada kolom 'TANGGAL'.")
+    st.stop()
+
 # =========================
-# SIDEBAR — DATABASE (RAW) TANPA LIMIT
+# SIDEBAR — Database (RAW) tanpa limit + Filter
 # =========================
 with st.sidebar:
     st.markdown("---")
     st.markdown("### 📚 Database (RAW)")
-
-    # Pilih tampilan data yang ingin dilihat di panel Database
-    db_view = st.radio("Tampilan", ["Full (tanpa filter)", "Sesuai filter"], index=0, horizontal=False)
-
-# =========================
-# FILTER (untuk dashboard & opsional untuk panel Database)
-# =========================
-valid_dates = df_tx["TANGGAL"].dropna()
-if valid_dates.empty:
-    st.error("Kolom TANGGAL tidak terbaca. Pastikan ada kolom 'TANGGAL' dengan format tanggal.")
-    st.stop()
-
-min_d, max_d = valid_dates.min(), valid_dates.max()
-
-with st.sidebar:
+    db_view = st.radio("Tampilan", ["Full (tanpa filter)","Sesuai filter"], index=0)
     st.markdown("### Filter")
-    f_area = st.multiselect("Area", sorted(df_tx["area"].dropna().unique()), help="Kosongkan jika ingin semua.")
+    f_area  = st.multiselect("Area", sorted(df_tx["area"].dropna().unique()))
     f_owner = st.multiselect("Owner", sorted(df_tx["OWNER"].dropna().unique()))
-    f_op = st.multiselect("Operator", sorted(df_tx["NAMA OPERATOR"].dropna().unique()))
-    pick_date = st.date_input("Tanggal dashboard (hari ini):", value=max_d, min_value=min_d, max_value=max_d)
+    f_op    = st.multiselect("Operator", sorted(df_tx["NAMA OPERATOR"].dropna().unique()))
 
-# Mask filter (untuk dashboard, dan untuk panel Database bila dipilih 'Sesuai filter')
+# Terapkan filter (untuk dashboard & opsi Database)
 mask = pd.Series(True, index=df_tx.index)
 if f_area:  mask &= df_tx["area"].isin(f_area)
 if f_owner: mask &= df_tx["OWNER"].isin(f_owner)
 if f_op:    mask &= df_tx["NAMA OPERATOR"].isin(f_op)
-
 df_tx_filtered = df_tx[mask].copy()
 
-# ==== Tampilkan DATABASE (RAW) di SIDEBAR — TANPA LIMIT ====
+# Panel Database (RAW) — no limit
 with st.sidebar:
     show_df = df_tx if db_view == "Full (tanpa filter)" else df_tx_filtered
-    # data ditampilkan utuh, virtualization aktif untuk efisiensi
     st.dataframe(show_df, use_container_width=True, height=900)
-    # tombol download CSV sesuai tampilan
-    csv_bytes = show_df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download CSV (Database RAW)", data=csv_bytes, file_name="database_raw.csv", mime="text/csv")
+    st.download_button("⬇️ Download CSV (Database RAW)", data=show_df.to_csv(index=False).encode("utf-8"),
+                       file_name="database_raw.csv", mime="text/csv")
 
 # =========================
-# AGREGASI HARI INI (per STUDIO) untuk DASHBOARD
+# RENTANG TANGGAL OTOMATIS (AKUMULASI)
 # =========================
-today_df = df_tx_filtered[df_tx_filtered["TANGGAL"] == pick_date]
-agg_today = today_df.groupby("STUDIO", as_index=False).agg(
-    omset_hari_ini=("OMSET", "sum"),
-    komisi=("EST KOMISI", "sum"),
-)
-agg_today.rename(columns={"STUDIO": "nama_studio"}, inplace=True)
+min_d, max_d = df_tx_filtered["TANGGAL"].min(), df_tx_filtered["TANGGAL"].max()
+day_count = (max_d - min_d).days + 1  # jumlah hari inklusif (misal 1..11 = 11 hari)
 
 # =========================
-# TARGET_PERSEN vs rata-rata 7 hari sebelumnya per studio
+# AGREGASI TOTAL (min..max) PER STUDIO
 # =========================
-hist_until = df_tx_filtered[df_tx_filtered["TANGGAL"] < pick_date].copy()
+range_df = df_tx_filtered[(df_tx_filtered["TANGGAL"] >= min_d) & (df_tx_filtered["TANGGAL"] <= max_d)]
+agg_total = range_df.groupby("STUDIO", as_index=False).agg(
+    omset_hari_ini=("OMSET","sum"),
+    komisi=("EST KOMISI","sum"),
+).rename(columns={"STUDIO":"nama_studio"})
+
+# =========================
+# TARGET_PERSEN & STATUS
+#   - rata_hari = total_komisi / jumlah_hari (min..max)
+#   - ref_avg7  = rata2 7 hari terakhir sebelum max_d
+#   - target%   = (rata_hari / ref_avg7) * 100
+# =========================
+hist_before_end = df_tx_filtered[df_tx_filtered["TANGGAL"] <= max_d].copy()
 ref = (
-    hist_until.sort_values("TANGGAL")
+    hist_before_end.sort_values("TANGGAL")
     .groupby("STUDIO")["EST KOMISI"]
     .apply(lambda s: s.tail(7).mean() if len(s) else np.nan)
-    .reset_index().rename(columns={"STUDIO": "nama_studio", "EST KOMISI": "komisi_avg7"})
+    .reset_index().rename(columns={"STUDIO":"nama_studio","EST KOMISI":"komisi_avg7"})
 )
-df = agg_today.merge(ref, on="nama_studio", how="left")
-df["target_persen"] = np.where(df["komisi_avg7"] > 0, (df["komisi"] / df["komisi_avg7"]) * 100.0, 100.0)
-df.drop(columns=["komisi_avg7"], inplace=True)
-
-# =========================
-# STATUS & RANK
-# =========================
+df = agg_total.merge(ref, on="nama_studio", how="left")
+df["avg_per_day"] = np.where(day_count > 0, df["komisi"] / day_count, np.nan)
+df["target_persen"] = np.where(df["komisi_avg7"] > 0, (df["avg_per_day"] / df["komisi_avg7"]) * 100.0, 100.0)
 tp = df["target_persen"].fillna(100)
 df["status"] = np.where(tp >= 100, "Naik", np.where(tp <= 90, "Turun", "Stabil"))
 df["rank_omset"] = df["omset_hari_ini"].rank(ascending=False, method="min").astype(int)
-df = df.sort_values("nama_studio").reset_index(drop=True)
+df = df.drop(columns=["komisi_avg7","avg_per_day"]).sort_values("nama_studio").reset_index(drop=True)
 
 # =========================
 # AUTO REFRESH / ROTATE
 # =========================
 try:
-    from streamlit import autorefresh as st_autorefresh  # Streamlit 1.25+
+    from streamlit import autorefresh as st_autorefresh
 except Exception:
     from streamlit_autorefresh import st_autorefresh
-
 refresh_counter = st_autorefresh(interval=AUTO_INTERVAL_MS, limit=None, key="auto_refresh_counter")
 num_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
 page_idx = 0 if refresh_counter is None else (refresh_counter % num_pages)
-start = page_idx * PAGE_SIZE
-end = start + PAGE_SIZE
+start, end = page_idx * PAGE_SIZE, page_idx * PAGE_SIZE + PAGE_SIZE
 page_df = df.iloc[start:end].copy()
 
 # =========================
 # HEADER
 # =========================
 now = datetime.now()
-meta_left = f"Halaman {page_idx+1}/{num_pages}"
-meta_right = f"{len(df)} studio • {pick_date.strftime('%d %b %Y')} • {now.strftime('%H:%M:%S')}"
+meta_left  = f"Halaman {page_idx+1}/{num_pages}"
+meta_right = f"{len(df)} studio • {min_d.strftime('%d %b %Y')} — {max_d.strftime('%d %b %Y')} • {now.strftime('%H:%M:%S')}"
 st.markdown(f"""
 <div class="dashboard-header">
-  <div>📊 DASHBOARD KINERJA STUDIO HARIAN
+  <div>📊 DASHBOARD KINERJA STUDIO (AKUMULASI)
     <span class="badge">{meta_left}</span>
   </div>
   <div><span class="badge">{meta_right}</span></div>
@@ -342,43 +273,31 @@ st.markdown(f"""
 # =========================
 # MAIN CONTENT
 # =========================
-def main_table_html(df_show: pd.DataFrame, start_idx: int) -> str:
-    return df_page_to_html(df_show, start_idx=start_idx)
-
 content_holder = st.empty()
 with content_holder.container():
     st.markdown('<div class="fade-in">', unsafe_allow_html=True)
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1,k2,k3,k4 = st.columns(4)
     with k1: st.metric("Total Studio", f"{len(df)}")
-    with k2: st.metric("Total Omset", rupiah(df["omset_hari_ini"].sum()))
-    with k3: st.metric("Rata-rata Omset", rupiah(df["omset_hari_ini"].mean()))
+    with k2: st.metric("Total Omset (Range)", rupiah(df["omset_hari_ini"].sum()))
+    with k3: st.metric("Total Komisi (Range)", rupiah(df["komisi"].sum()))
     with k4:
-        naik_pct = (df["status"].str.lower() == "naik").mean()*100
+        naik_pct = (df["status"].str.lower()=="naik").mean()*100
         st.metric("Persentase Naik", f"{naik_pct:.1f}%")
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    st.markdown('<div style="background:#ffffff; padding:8px; border-radius:12px;">', unsafe_allow_html=True)
-    st.markdown(main_table_html(page_df, start_idx=start), unsafe_allow_html=True)
+    st.markdown('<div style="background:#fff; padding:8px; border-radius:12px;">', unsafe_allow_html=True)
+    st.markdown(df_page_to_html(page_df, start_idx=start), unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# RUNNING TEXT (Bottom)
+# RUNNING TEXT
 # =========================
 if not df.empty:
     best_row = df.iloc[df["omset_hari_ini"].astype(float).idxmax()]
-    running_text = (
-        f"Studio terbaik hari ini: {best_row['nama_studio']} (Omset: {rupiah(best_row['omset_hari_ini'])})   •   "
-        f"Update terakhir: {now.strftime('%H:%M:%S, %d %b %Y')}"
-    )
+    running = f"Studio terbaik (akumulasi): {best_row['nama_studio']} (Omset: {rupiah(best_row['omset_hari_ini'])}) • Range: {min_d.strftime('%d %b')}–{max_d.strftime('%d %b %Y')} • Update: {now.strftime('%H:%M:%S')}"
 else:
-    running_text = "Belum ada data untuk tanggal ini • Update terakhir: " + now.strftime('%H:%M:%S, %d %b %Y')
-
-st.markdown(f"""
-<div class="marquee-wrap">
-  <div class="marquee-inner">{running_text}</div>
-</div>
-""", unsafe_allow_html=True)
+    running = f"Tidak ada data • Update: {now.strftime('%H:%M:%S, %d %b %Y')}"
+st.markdown(f'<div class="marquee-wrap"><div class="marquee-inner">{running}</div></div>', unsafe_allow_html=True)
