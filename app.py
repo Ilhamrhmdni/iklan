@@ -1,8 +1,8 @@
-# app.py — Dashboard Kinerja Studio (Opsi A + Filter Tanggal Range)
+# app.py — Dashboard Kinerja Studio (Target Bulanan 14jt)
 # By Albert
 
-import io, re, math
-from datetime import datetime
+import io, re, math, calendar
+from datetime import datetime, date
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -91,9 +91,11 @@ def status_to_pill(s):
     if s == "turun": return '<span class="pill pill-red">Turun</span>'
     return '<span class="pill pill-yellow">Stabil</span>'
 
-def df_page_to_html(df_page, start_idx, label_total=True, unit_label="Nama Unit"):
+def df_page_to_html(df_page, start_idx, label_total=True, unit_label="Nama Unit", show_monthly=False):
     heads = ["No", unit_label, "Total Omset" if label_total else "Omset Hari Ini",
              "Total Komisi" if label_total else "Komisi", "Target (%)", "Status"]
+    if show_monthly:
+        heads.insert(5, "Prog Bulan")  # sebelum Status
     html = ['<table class="styled-table">',"<thead><tr>"]
     html += [f"<th>{h}</th>" for h in heads]
     html.append("</tr></thead><tbody>")
@@ -104,6 +106,11 @@ def df_page_to_html(df_page, start_idx, label_total=True, unit_label="Nama Unit"
         html.append(f"<td>{rupiah(row.omset_hari_ini)}</td>")
         html.append(f"<td>{rupiah(row.komisi)}</td>")
         html.append(f"<td>{row.target_persen:.2f}%</td>")
+        if show_monthly:
+            prog = getattr(row, "progress_bulan", np.nan)
+            val_bln = getattr(row, "komisi_bulan", 0.0)
+            tick = "✅" if val_bln >= getattr(row, "target_bulanan", 0) else "❌"
+            html.append(f"<td>{tick} {prog:.1f}% ({rupiah(val_bln)})</td>")
         html.append(f"<td>{status_to_pill(row.status)}</td>")
         html.append("</tr>")
     html.append("</tbody></table>")
@@ -206,7 +213,7 @@ if valid_dates.empty:
 min_d_all, max_d_all = valid_dates.min(), valid_dates.max()
 
 # =========================
-# SIDEBAR — Mode/Group + Database + FILTER (termasuk TANGGAL RANGE)
+# SIDEBAR — Mode/Group + Database + FILTER (termasuk TANGGAL RANGE & Target Bulan)
 # =========================
 with st.sidebar:
     st.markdown("---")
@@ -218,7 +225,7 @@ with st.sidebar:
     db_view = st.radio("Tampilan Database", ["Full (tanpa filter)", "Sesuai filter"], index=0)
 
     st.markdown("### Filter")
-    # ➊ Filter Tanggal (Range) — baru
+    # ➊ Filter Tanggal (Range)
     date_range = st.date_input(
         "Rentang tanggal (filter)",
         value=(min_d_all, max_d_all),
@@ -234,7 +241,7 @@ with st.sidebar:
     f_owner = st.multiselect("Owner", sorted(df_tx["OWNER"].dropna().unique()))
     f_op    = st.multiselect("Operator", sorted(df_tx["NAMA OPERATOR"].dropna().unique()))
 
-    # ➋ Untuk mode per tanggal: pilih 1 tanggal (default = akhir range)
+    # ➋ Per tanggal (1 hari dalam range)
     if mode == "Per tanggal":
         pick_date = st.date_input("Tanggal (Per tanggal)", value=f_end, min_value=f_start, max_value=f_end)
 
@@ -242,6 +249,9 @@ with st.sidebar:
     PAGE_SIZE = st.number_input("Baris per halaman", min_value=10, max_value=500, value=20, step=5)
     AUTO_INTERVAL_MS = st.number_input("Durasi rotasi (ms)", min_value=1000, max_value=60000, value=5000, step=500)
     q = st.text_input("Cari unit… (opsional)", "")
+
+    st.markdown("### Target Bulanan")
+    target_bulanan_value = st.number_input("🎯 Target bulanan (komisi)", min_value=0, value=14_000_000, step=500_000)
 
 # Terapkan filter (Area/Owner/Operator + Tanggal Range) ke dataset utama
 mask = (df_tx["TANGGAL"] >= f_start) & (df_tx["TANGGAL"] <= f_end)
@@ -279,7 +289,7 @@ daily = (
 )
 
 # =========================
-# AGREGASI SESUAI MODE
+# AGREGASI SESUAI MODE (status = Naik/Turun/Stabil berdasarkan baseline 7hari)
 # =========================
 if mode == "Akumulasi penuh":
     min_d, max_d = daily["TANGGAL"].min(), daily["TANGGAL"].max()
@@ -290,7 +300,6 @@ if mode == "Akumulasi penuh":
         komisi=("komisi","sum"),
     )
 
-    # referensi: avg komisi 7 hari terakhir sebelum max_d (stabil: butuh ≥3 data)
     tmp = (daily[daily["TANGGAL"] <= max_d]
            .groupby(gkey)["komisi"].apply(lambda s: s.tail(7)))
     ref = (tmp.groupby(level=0).agg(['mean','count'])
@@ -309,15 +318,16 @@ if mode == "Akumulasi penuh":
     header_meta  = f"{len(df)} unit • {min_d.strftime('%d %b %Y')} — {max_d.strftime('%d %b %Y')} • {datetime.now().strftime('%H:%M:%S')}"
     label_total  = True
     running_text = f"Mode Akumulasi • Range {min_d.strftime('%d %b')}–{max_d.strftime('%d %b %Y')} • Group by {group_choice}"
+    anchor_date = max_d  # untuk target bulanan (MTD)
 
 else:  # Per tanggal
-    day_label = pick_date.strftime('%d %b %Y') if "pick_date" in locals() else f_end.strftime('%d %b %Y')
-    pick = pick_date if "pick_date" in locals() else f_end
+    anchor_date = pick_date if "pick_date" in locals() else f_end
+    day_label = anchor_date.strftime('%d %b %Y')
 
-    today = daily[daily["TANGGAL"]==pick]
+    today = daily[daily["TANGGAL"]==anchor_date]
     totals = today.groupby(gkey, as_index=False).agg(omset_hari_ini=("omset","sum"), komisi=("komisi","sum"))
 
-    hist = daily[daily["TANGGAL"]<pick]
+    hist = daily[daily["TANGGAL"]<anchor_date]
     tmp = hist.groupby(gkey)["komisi"].apply(lambda s: s.tail(7))
     ref = (tmp.groupby(level=0).agg(['mean','count'])
               .reset_index().rename(columns={gkey:"nama_unit", 'mean':'komisi_avg7','count':'ref_n'}))
@@ -335,27 +345,32 @@ else:  # Per tanggal
     label_total  = False
     running_text = f"Mode Per Tanggal • {day_label} • Group by {group_choice}"
 
+# =========================
+# PROGRESS TARGET BULANAN (MTD komisi vs target)
+# =========================
+# Tentukan bulan aktif dari anchor_date
+month_start = anchor_date.replace(day=1)
+last_day = calendar.monthrange(anchor_date.year, anchor_date.month)[1]
+month_end = anchor_date.replace(day=last_day)
+
+# Ambil MTD dalam batas filter tanggal (jaga-jaga kalau filter memotong bulan)
+mtd_end = min(anchor_date, f_end)
+mtd_start = max(month_start, f_start)
+
+mtd = (
+    df_tx_f[(df_tx_f["TANGGAL"] >= mtd_start) & (df_tx_f["TANGGAL"] <= mtd_end)]
+    .groupby(gkey, as_index=False)["EST KOMISI"].sum()
+    .rename(columns={"EST KOMISI":"komisi_bulan"})
+)
+
+df = df.merge(mtd.rename(columns={gkey:"nama_unit"}), on="nama_unit", how="left")
+df["komisi_bulan"] = df["komisi_bulan"].fillna(0.0)
+df["target_bulanan"] = float(target_bulanan_value)
+df["progress_bulan"] = np.where(df["target_bulanan"]>0, (df["komisi_bulan"]/df["target_bulanan"])*100.0, np.nan)
+
 # Filter cepat nama unit
 if q:
     df = df[df["nama_unit"].str.contains(q, case=False, na=False)].reset_index(drop=True)
-
-# =========================
-# ALERT: Turun 3 hari berturut-turut (komisi harian)
-# =========================
-def find_three_down_streak(daily_df: pd.DataFrame, key: str):
-    alerts = []
-    for unit, grp in daily_df.groupby(key):
-        s = grp.sort_values("TANGGAL")["komisi"].values
-        if len(s) < 4:  # minimal 4 titik untuk 3 penurunan
-            continue
-        a,b,c,d = s[-4], s[-3], s[-2], s[-1]
-        if (b < a) and (c < b) and (d < c):
-            drop_pct = (1 - d / a) * 100 if a > 0 else np.nan
-            alerts.append((unit, a, d, drop_pct))
-    alerts.sort(key=lambda x: (x[3] if not pd.isna(x[3]) else -1), reverse=True)
-    return alerts
-
-alerts = find_three_down_streak(daily, gkey)
 
 # =========================
 # AUTO REFRESH / ROTATE
@@ -378,7 +393,7 @@ st.markdown(f"""
   <div>{header_title}
     <span class="badge">Halaman {page_idx+1}/{num_pages}</span>
   </div>
-  <div><span class="badge">{header_meta}</span></div>
+  <div><span class="badge">{header_meta} • Target Bulanan: {rupiah(target_bulanan_value)}</span></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -388,20 +403,6 @@ st.markdown(f"""
 top10 = df.sort_values("omset_hari_ini", ascending=False).head(10)
 chips = " ".join([f"<span>{i+1}. {r.nama_unit} — {rupiah(r.omset_hari_ini)}</span>" for i, r in top10.reset_index(drop=True).iterrows()])
 st.markdown(f'<div class="leader-chips">{chips}</div>', unsafe_allow_html=True)
-
-# =========================
-# ALERT PANEL
-# =========================
-if alerts:
-    with st.expander("⚠️ Alert: Tren Turun 3 hari berturut-turut", expanded=False):
-        show = alerts[:10]
-        rows = []
-        for unit, a, d, pct in show:
-            pct_text = f"{pct:.1f}%" if not pd.isna(pct) else "n/a"
-            rows.append({"Unit": unit, "Komisi 4-hari lalu": rupiah(a), "Komisi hari ini": rupiah(d), "Penurunan total": pct_text})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-else:
-    st.caption("✅ Tidak ada unit dengan tren 'Turun' 3 hari berturut-turut.")
 
 # =========================
 # MAIN CONTENT
@@ -415,13 +416,23 @@ with content_holder.container():
     with k2: st.metric("Total Omset", rupiah(df["omset_hari_ini"].sum()))
     with k3: st.metric("Total Komisi", rupiah(df["komisi"].sum()))
     with k4:
-        naik_pct = (df["status"].str.lower()=="naik").mean()*100 if len(df) else 0.0
-        st.metric("Persentase Naik", f"{naik_pct:.1f}%")
+        achieved = int((df["komisi_bulan"] >= df["target_bulanan"]).sum())
+        st.metric("Unit ≥ Target Bulanan", f"{achieved}/{len(df)}")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # Tabel utama + kolom Prog Bulan
     st.markdown('<div style="background:#fff; padding:8px; border-radius:12px;">', unsafe_allow_html=True)
-    st.markdown(df_page_to_html(page_df, start_idx=start, label_total=(mode=="Akumulasi penuh"), unit_label=glabel), unsafe_allow_html=True)
+    st.markdown(
+        df_page_to_html(
+            page_df,
+            start_idx=start,
+            label_total=label_total,
+            unit_label=glabel,
+            show_monthly=True
+        ),
+        unsafe_allow_html=True
+    )
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Export hasil agregasi
@@ -439,7 +450,13 @@ with content_holder.container():
 # =========================
 if not df.empty:
     best_row = df.iloc[df["omset_hari_ini"].astype(float).idxmax()]
-    running = f"{running_text} • Unit terbaik: {best_row['nama_unit']} (Omset: {rupiah(best_row['omset_hari_ini'])}) • Update: {datetime.now().strftime('%H:%M:%S')}"
+    achieved = int((df["komisi_bulan"] >= df["target_bulanan"]).sum())
+    running = (
+        f"{running_text} • Target Bulanan: {rupiah(target_bulanan_value)} • "
+        f"Unit ≥ Target: {achieved}/{len(df)} • "
+        f"Unit terbaik: {best_row['nama_unit']} (Omset: {rupiah(best_row['omset_hari_ini'])}) • "
+        f"Update: {datetime.now().strftime('%H:%M:%S')}"
+    )
 else:
-    running = f"{running_text} • Tidak ada data"
+    running = f"{running_text} • Target Bulanan: {rupiah(target_bulanan_value)} • Tidak ada data"
 st.markdown(f'<div class="marquee-wrap"><div class="marquee-inner">{running}</div></div>', unsafe_allow_html=True)
