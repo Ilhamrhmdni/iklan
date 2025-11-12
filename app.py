@@ -4,10 +4,17 @@ import plotly.express as px
 import time
 from datetime import datetime
 
-# Fungsi untuk memuat data dari CSV
+# Fungsi untuk memuat data dari CSV atau file uploader
 @st.cache_data
-def load_data():
-    df = pd.read_csv('data_studio.csv')
+def load_data(uploaded_file=None):
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+    else:
+        try:
+            df = pd.read_csv('data_studio.csv')
+        except FileNotFoundError:
+            st.error("File 'data_studio.csv' tidak ditemukan. Silakan upload file CSV menggunakan uploader di bawah.")
+            return pd.DataFrame()  # Return empty DataFrame if file not found
     # Pastikan kolom TANGGAL dalam format datetime
     df['TANGGAL'] = pd.to_datetime(df['TANGGAL'], errors='coerce')
     return df
@@ -32,11 +39,18 @@ def style_table(df):
         return color
     return df.style.applymap(color_area, subset=['AREA'])
 
-# Load data
-df = load_data()
-
 # Judul dashboard
 st.title("📊 DASHBOARD OMSET & KOMISI STUDIO SHOPEE LIVE AFFILIATE")
+
+# File uploader untuk CSV
+uploaded_file = st.sidebar.file_uploader("Upload file CSV (data_studio.csv)", type=["csv"])
+
+# Load data
+df = load_data(uploaded_file)
+
+# Jika data kosong, hentikan eksekusi lebih lanjut
+if df.empty:
+    st.stop()
 
 # Hitung total omset dan estimasi komisi
 total_omset = df['OMSET'].sum()
