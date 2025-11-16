@@ -2,87 +2,77 @@ import streamlit as st
 import pandas as pd
 import re
 
+st.set_page_config(page_title="Rekap Komisi Shopee", layout="wide")
+
 st.title("Rekap Komisi & Omset Shopee per Akun")
 
-st.write("Paste data mentah di bawah ini:")
+st.write("Paste data mentahan di bawah ini (format Shopee)")
 
 raw_text = st.text_area("Input Data", height=300)
 
-def parse_number(num_str):
-    """Convert angka '1.234.567' menjadi integer 1234567."""
-    if num_str.strip() == "-" or num_str.strip() == "0":
-        return 0
-    return int(num_str.replace(".", "").strip())
-
-def parse_item(item):
+def parse_cell(value):
     """
-    Format item contoh:
+    Parse format seperti:
     63.406 - 983.145 (B)
     0 - 0
     """
-    # Hilangkan grade (C), (B), (D), (S), dst
-    clean = re.sub(r"\([A-Za-z0-9\+\-]+\)", "", item).strip()
+    value = value.strip()
 
-    try:
-        komisi, omset = clean.split("-")
-        komisi = parse_number(komisi)
-        omset = parse_number(omset)
-        return komisi, omset
-    except:
+    # Jika kosong atau 0 - 0
+    if value == "" or value == "0 - 0":
         return 0, 0
+    
+    # Ambil komisi & omset
+    match = re.match(r"([\d\.]+)\s*-\s*([\d\.]+)", value)
+    if not match:
+        return 0, 0
+    
+    komisi = int(match.group(1).replace(".", ""))
+    omset = int(match.group(2).replace(".", ""))
+    return komisi, omset
 
-def process_data(text):
+
+def process_table(text):
     rows = []
-    for line in text.splitlines():
+    for line in text.split("\n"):
         line = line.strip()
-        if not line:
+        if not line or "TOTAL" in line:
             continue
 
-        parts = line.split()
+        parts = line.split("\t")
         if len(parts) < 3:
             continue
-
+        
         studio = parts[0]
         username = parts[1]
+        tanggal_values = parts[2:]
 
-        items = " ".join(parts[2:])
-        cols = items.split("\t") if "\t" in items else items.split("  ")
+        total_komisi = 0
+        total_omset = 0
 
-        komisi_total = 0
-        omset_total = 0
+        for cell in tanggal_values:
+            k, o = parse_cell(cell)
+            total_komisi += k
+            total_omset += o
 
-        # Loop tiap kolom tanggal (komisi - omset)
-        for col in cols:
-            col = col.strip()
-            if col == "":
-                continue
-            k, o = parse_item(col)
-            komisi_total += k
-            omset_total += o
-
-        rows.append([username, komisi_total, omset_total])
+        rows.append([username, total_komisi, total_omset])
 
     df = pd.DataFrame(rows, columns=["Username", "Komisi", "Omset"])
     return df
 
+
 if st.button("Proses Data"):
-    try:
-        df = process_data(raw_text)
-
-        total_komisi = df["Komisi"].sum()
-        total_omset = df["Omset"].sum()
-
+    if raw_text.strip() == "":
+        st.error("Isi dulu datanya.")
+    else:
+        df = process_table(raw_text)
         st.subheader("Hasil Rekap")
-
-        st.dataframe(df)
+        st.dataframe(df, use_container_width=True)
 
         st.subheader("TOTAL")
-        total_df = pd.DataFrame({
-            "Username": ["ALL"],
-            "Komisi": [total_komisi],
-            "Omset": [total_omset]
-        })
-        st.dataframe(total_df)
-
-    except Exception as e:
-        st.error(f"ERROR: {e}")
+        total_row = pd.DataFrame([{
+            "Username": "ALL",
+            "Komisi": df["Komisi"].sum(),
+            "Omset": df["Omset"].sum()
+        }])
+        st.dataframe(total_row, use_container_width=True)
