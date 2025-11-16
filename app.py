@@ -4,59 +4,36 @@ import re
 
 st.title("Rekap Komisi & Omset Shopee per Akun")
 
-st.write("Paste data mentahan di bawah ini:")
+st.write("Paste data mentah di bawah ini:")
 
 raw_text = st.text_area("Input Data", height=300)
 
-def parse_value(text):
+def parse_number(num_str):
+    """Convert angka '1.234.567' menjadi integer 1234567."""
+    if num_str.strip() == "-" or num_str.strip() == "0":
+        return 0
+    return int(num_str.replace(".", "").strip())
+
+def parse_item(item):
     """
-    Menerima format seperti:
+    Format item contoh:
     63.406 - 983.145 (B)
-    24.619 - 474.566 (D)
     0 - 0
-    1.172.799 (S)
     """
-
-    text = text.strip()
-
-    # Jika "0 - 0"
-    if text == "0 - 0":
-        return 0, 0
-
-    # Pisahkan komisi dan omset
-    parts = text.split("-")
-    if len(parts) < 2:
-        return 0, 0
-
-    komisi_raw = parts[0].strip()
-    omset_raw = parts[1].strip()
-
-    # Hapus grade (B), (C), (S), (S+), (D), dll
-    omset_raw = re.sub(r"\([^)]*\)", "", omset_raw).strip()
-
-    # Bersihkan titik ribuan
-    komisi_raw = komisi_raw.replace(".", "").strip()
-    omset_raw = omset_raw.replace(".", "").strip()
-
-    # Convert ke integer aman
-    try:
-        komisi = int(komisi_raw)
-    except:
-        komisi = 0
+    # Hilangkan grade (C), (B), (D), (S), dst
+    clean = re.sub(r"\([A-Za-z0-9\+\-]+\)", "", item).strip()
 
     try:
-        omset = int(omset_raw)
+        komisi, omset = clean.split("-")
+        komisi = parse_number(komisi)
+        omset = parse_number(omset)
+        return komisi, omset
     except:
-        omset = 0
+        return 0, 0
 
-    return komisi, omset
-
-
-def process(raw):
-    lines = raw.split("\n")
-    data = {}
-
-    for line in lines:
+def process_data(text):
+    rows = []
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -65,40 +42,47 @@ def process(raw):
         if len(parts) < 3:
             continue
 
-        # Studio + Username
         studio = parts[0]
         username = parts[1]
 
-        # Gabungkan kembali username jika mengandung spasi (jarang, tapi aman)
-        if "_" not in username and "." in parts[2]:  
-            username = f"{username} {parts[2]}"
-            row_data = parts[3:]
-        else:
-            row_data = parts[2:]
+        items = " ".join(parts[2:])
+        cols = items.split("\t") if "\t" in items else items.split("  ")
 
-        # Parsing semua tanggal dalam baris
         komisi_total = 0
         omset_total = 0
 
-        joined = " ".join(row_data)
-        entries = re.findall(r"([0-9\.\s]+-\s*[0-9\.\s]+(?:\s*\([^)]*\))?)", joined)
-
-        for e in entries:
-            k, o = parse_value(e)
+        # Loop tiap kolom tanggal (komisi - omset)
+        for col in cols:
+            col = col.strip()
+            if col == "":
+                continue
+            k, o = parse_item(col)
             komisi_total += k
             omset_total += o
 
-        data[username] = {"Komisi": komisi_total, "Omset": omset_total}
+        rows.append([username, komisi_total, omset_total])
 
-    df = pd.DataFrame.from_dict(data, orient="index")
-    df.loc["TOTAL"] = df.sum(numeric_only=True)
+    df = pd.DataFrame(rows, columns=["Username", "Komisi", "Omset"])
     return df
 
-
 if st.button("Proses Data"):
-    if raw_text.strip():
-        df = process(raw_text)
+    try:
+        df = process_data(raw_text)
+
+        total_komisi = df["Komisi"].sum()
+        total_omset = df["Omset"].sum()
+
         st.subheader("Hasil Rekap")
+
         st.dataframe(df)
-    else:
-        st.error("Silakan paste data terlebih dahulu.")
+
+        st.subheader("TOTAL")
+        total_df = pd.DataFrame({
+            "Username": ["ALL"],
+            "Komisi": [total_komisi],
+            "Omset": [total_omset]
+        })
+        st.dataframe(total_df)
+
+    except Exception as e:
+        st.error(f"ERROR: {e}")
