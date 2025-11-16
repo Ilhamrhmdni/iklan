@@ -2,84 +2,103 @@ import streamlit as st
 import pandas as pd
 import re
 
-st.set_page_config(page_title="Rekap Komisi & Omset Studio", layout="wide")
+st.title("Rekap Komisi & Omset Shopee per Akun")
 
-st.title("Rekap Komisi & Omset Harian (Auto SUM)")
+st.write("Paste data mentahan di bawah ini:")
 
-st.write("""
-Paste data mentah di bawah ini (format seperti dari Shopee):
-""")
+raw_text = st.text_area("Input Data", height=300)
 
-raw_text = st.text_area("Input Data", height=400, placeholder="Paste data di sini...")
+def parse_value(text):
+    """
+    Menerima format seperti:
+    63.406 - 983.145 (B)
+    24.619 - 474.566 (D)
+    0 - 0
+    1.172.799 (S)
+    """
 
-def parse_number(value):
-    # Hilangkan grade (contoh: (B), (C), (S), (D))
-    value = re.sub(r"\([A-Z]\)", "", value).strip()
-    
-    # Pisahkan komisi - omset
-    if "-" not in value:
+    text = text.strip()
+
+    # Jika "0 - 0"
+    if text == "0 - 0":
         return 0, 0
-    
-    komisi_raw, omset_raw = value.split("-")
-    
-    # Hilangkan titik ribuan
-    komisi = int(komisi_raw.replace(".", "").strip())
-    omset = int(omset_raw.replace(".", "").strip())
-    
+
+    # Pisahkan komisi dan omset
+    parts = text.split("-")
+    if len(parts) < 2:
+        return 0, 0
+
+    komisi_raw = parts[0].strip()
+    omset_raw = parts[1].strip()
+
+    # Hapus grade (B), (C), (S), (S+), (D), dll
+    omset_raw = re.sub(r"\([^)]*\)", "", omset_raw).strip()
+
+    # Bersihkan titik ribuan
+    komisi_raw = komisi_raw.replace(".", "").strip()
+    omset_raw = omset_raw.replace(".", "").strip()
+
+    # Convert ke integer aman
+    try:
+        komisi = int(komisi_raw)
+    except:
+        komisi = 0
+
+    try:
+        omset = int(omset_raw)
+    except:
+        omset = 0
+
     return komisi, omset
 
-def process_data(raw):
-    rows = []
+
+def process(raw):
     lines = raw.split("\n")
+    data = {}
 
     for line in lines:
-        parts = line.split("\t")
+        line = line.strip()
+        if not line:
+            continue
+
+        parts = line.split()
         if len(parts) < 3:
             continue
-        
+
+        # Studio + Username
         studio = parts[0]
         username = parts[1]
 
-        # Data tanggal mulai kolom ke-3
-        tanggal_data = parts[2:]
+        # Gabungkan kembali username jika mengandung spasi (jarang, tapi aman)
+        if "_" not in username and "." in parts[2]:  
+            username = f"{username} {parts[2]}"
+            row_data = parts[3:]
+        else:
+            row_data = parts[2:]
 
-        total_komisi = 0
-        total_omset = 0
+        # Parsing semua tanggal dalam baris
+        komisi_total = 0
+        omset_total = 0
 
-        for item in tanggal_data:
-            if item.strip() == "" or item == "0 - 0":
-                continue
-            
-            komisi, omset = parse_number(item)
-            total_komisi += komisi
-            total_omset += omset
+        joined = " ".join(row_data)
+        entries = re.findall(r"([0-9\.\s]+-\s*[0-9\.\s]+(?:\s*\([^)]*\))?)", joined)
 
-        rows.append([username, total_komisi, total_omset])
+        for e in entries:
+            k, o = parse_value(e)
+            komisi_total += k
+            omset_total += o
 
-    df = pd.DataFrame(rows, columns=["Username", "Est. Komisi", "Omset"])
-    
-    # Tambahkan total keseluruhan
-    total_row = pd.DataFrame([[
-        "TOTAL",
-        df["Est. Komisi"].sum(),
-        df["Omset"].sum()
-    ]], columns=df.columns)
+        data[username] = {"Komisi": komisi_total, "Omset": omset_total}
 
-    df = pd.concat([df, total_row], ignore_index=True)
+    df = pd.DataFrame.from_dict(data, orient="index")
+    df.loc["TOTAL"] = df.sum(numeric_only=True)
     return df
 
-if raw_text.strip():
-    df = process_data(raw_text)
-    
-    st.subheader("Hasil Rekap")
-    st.dataframe(df, use_container_width=True)
 
-    st.subheader("Download CSV")
-    st.download_button(
-        label="Download Rekap CSV",
-        data=df.to_csv(index=False).encode("utf-8"),
-        file_name="rekap_komisi_omset.csv",
-        mime="text/csv"
-    )
-else:
-    st.info("Silakan paste data mentah pada kolom input di atas.")
+if st.button("Proses Data"):
+    if raw_text.strip():
+        df = process(raw_text)
+        st.subheader("Hasil Rekap")
+        st.dataframe(df)
+    else:
+        st.error("Silakan paste data terlebih dahulu.")
